@@ -48,6 +48,25 @@ func runAddDraw(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create lottery log: %w", err)
 	}
 
+	// Check if witnesses exist and have cosigned the current tree state
+	currentSize, err := lotteryLog.GetTreeSize()
+	if err != nil {
+		return fmt.Errorf("failed to get tree size: %w", err)
+	}
+
+	if currentSize > 0 {
+		cosignatures, err := lotteryLog.GetLatestWitnessCosignatures()
+		if err != nil {
+			return fmt.Errorf("failed to get witness cosignatures: %w", err)
+		}
+
+		if len(cosignatures) == 0 {
+			return fmt.Errorf("cannot add draw: no witnesses have cosigned the current tree state (size=%d). At least one witness must observe and sign the current state before adding new draws", currentSize)
+		}
+
+		logger.Info("Witnesses verified", "count", len(cosignatures), "tree_size", currentSize)
+	}
+
 	// Generate random draw if requested
 	if randomDraw {
 		// Generate RNG hash from timestamp

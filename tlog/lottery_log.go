@@ -21,6 +21,15 @@ type LotteryDraw struct {
 	DrawType    string    `json:"draw_type"`
 }
 
+// WitnessCosignature represents a witness's signature on a tree state
+type WitnessCosignature struct {
+	WitnessID string    `json:"witness_id"`
+	TreeSize  int64     `json:"tree_size"`
+	TreeHash  string    `json:"tree_hash"`
+	Timestamp time.Time `json:"timestamp"`
+	Signature string    `json:"signature"`
+}
+
 // LotteryLog manages the transparency log for lottery draws
 type LotteryLog struct {
 	dataDir string
@@ -258,4 +267,79 @@ func (l *LotteryLog) getTreeSize() (int64, error) {
 func (l *LotteryLog) setTreeSize(size int64) error {
 	sizePath := filepath.Join(l.dataDir, "tree-size.txt")
 	return os.WriteFile(sizePath, []byte(fmt.Sprintf("%d", size)), 0644)
+}
+
+// AddWitnessCosignature stores a witness's signature for a specific tree state
+func (l *LotteryLog) AddWitnessCosignature(cosig WitnessCosignature) error {
+	cosigPath := filepath.Join(l.dataDir, fmt.Sprintf("cosignatures-%d.json", cosig.TreeSize))
+
+	var cosignatures []WitnessCosignature
+
+	// Load existing cosignatures if file exists
+	if data, err := os.ReadFile(cosigPath); err == nil {
+		if err := json.Unmarshal(data, &cosignatures); err != nil {
+			return fmt.Errorf("failed to parse existing cosignatures: %w", err)
+		}
+	}
+
+	// Check if this witness already signed this tree state
+	for _, existing := range cosignatures {
+		if existing.WitnessID == cosig.WitnessID {
+			return fmt.Errorf("witness %s already cosigned tree size %d", cosig.WitnessID, cosig.TreeSize)
+		}
+	}
+
+	// Append new cosignature
+	cosignatures = append(cosignatures, cosig)
+
+	// Save back to disk
+	data, err := json.MarshalIndent(cosignatures, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal cosignatures: %w", err)
+	}
+
+	if err := os.WriteFile(cosigPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write cosignatures file: %w", err)
+	}
+
+	l.logger.Info("Witness cosignature stored",
+		"witness_id", cosig.WitnessID,
+		"tree_size", cosig.TreeSize,
+		"tree_hash", cosig.TreeHash[:16]+"...")
+
+	return nil
+}
+
+// GetWitnessCosignatures retrieves all witness signatures for a specific tree state
+func (l *LotteryLog) GetWitnessCosignatures(treeSize int64) ([]WitnessCosignature, error) {
+	cosigPath := filepath.Join(l.dataDir, fmt.Sprintf("cosignatures-%d.json", treeSize))
+
+	data, err := os.ReadFile(cosigPath)
+	if os.IsNotExist(err) {
+		return []WitnessCosignature{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read cosignatures: %w", err)
+	}
+
+	var cosignatures []WitnessCosignature
+	if err := json.Unmarshal(data, &cosignatures); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal cosignatures: %w", err)
+	}
+
+	return cosignatures, nil
+}
+
+// GetLatestWitnessCosignatures retrieves all witness signatures for the current tree state
+func (l *LotteryLog) GetLatestWitnessCosignatures() ([]WitnessCosignature, error) {
+	size, err := l.GetTreeSize()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tree size: %w", err)
+	}
+
+	if size == 0 {
+		return []WitnessCosignature{}, nil
+	}
+
+	return l.GetWitnessCosignatures(size)
 }

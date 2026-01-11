@@ -90,9 +90,11 @@ Prove the log grew from size N to M without tampering:
 
 ### Witness System with Certificate Authentication
 
-To prevent tampering by malicious operators, the system includes a witness mechanism where independent parties can observe and cryptographically sign tree states.
+To prevent tampering by malicious operators, the system includes a witness mechanism where independent parties can observe and cryptographically sign tree states using X.509 certificates.
 
-#### Setting Up as a Witness
+### Setting Up as a Witness
+
+#### Setting Up as RSA Witness
 
 Initialize yourself as a witness with a unique identifier:
 
@@ -105,7 +107,35 @@ This generates:
 - Public key for sharing with others
 - Stored in `.lottery-data/witnesses/alice-auditor/`
 
-#### Observing Tree States
+### Keycloak Authentication
+
+Recommended for production with centralized management. See [KEYCLOAK_SETUP.md](KEYCLOAK_SETUP.md) for full guide.
+
+#### Quick Start with Keycloak
+
+1. Start Keycloak:
+```bash
+docker-compose -f docker-compose-keycloak.yml up -d
+```
+
+2. Configure realm and get initial access token (see KEYCLOAK_SETUP.md)
+
+3. Update `config.yaml`:
+```yaml
+witness_auth_method: "keycloak"
+keycloak:
+  enabled: true
+  url: "http://localhost:8080"
+  realm: "lottery-witnesses"
+  initial_access_token: "eyJhbG..."
+```
+
+4. Register as witness:
+```bash
+./lottery-tlog witness-register --witness-id "alice-auditor"
+```
+
+### Common Operations (Both Methods)
 
 Record and sign the current tree state:
 

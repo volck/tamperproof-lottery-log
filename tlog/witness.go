@@ -5,10 +5,12 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"time"
@@ -48,7 +50,7 @@ func NewWitnessManager(dataDir string, witnessID string) (*WitnessManager, error
 	}, nil
 }
 
-// InitCertificate generates a new RSA key pair for the witness
+// InitCertificate generates a new RSA key pair and X.509 certificate for the witness
 func (wm *WitnessManager) InitCertificate() error {
 	// Generate RSA key pair
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -59,23 +61,53 @@ func (wm *WitnessManager) InitCertificate() error {
 	wm.privateKey = privateKey
 	wm.publicKey = &privateKey.PublicKey
 
-	// Save private key
-	privKeyPath := filepath.Join(wm.witnessDir, "witness-cert.pem")
-	privKeyFile, err := os.Create(privKeyPath)
-	if err != nil {
-		return fmt.Errorf("failed to create private key file: %w", err)
+	// Create X.509 certificate for mTLS
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName:   wm.witnessID,
+			Organization: []string{"Lottery Transparency Log"},
+			OrganizationalUnit: []string{"Witness"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(10, 0, 0), // Valid for 10 years
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
 	}
-	defer privKeyFile.Close()
 
+	// Self-sign the certificate
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, wm.publicKey, privateKey)
+	if err != nil {
+		return fmt.Errorf("failed to create certificate: %w", err)
+	}
+
+	// Save certificate and private key in a single PEM file for TLS
+	certKeyPath := filepath.Join(wm.witnessDir, "witness-cert.pem")
+	certKeyFile, err := os.Create(certKeyPath)
+	if err != nil {
+		return fmt.Errorf("failed to create certificate file: %w", err)
+	}
+	defer certKeyFile.Close()
+
+	// Write certificate
+	if err := pem.Encode(certKeyFile, &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certDER,
+	}); err != nil {
+		return fmt.Errorf("failed to write certificate: %w", err)
+	}
+
+	// Write private key
 	privKeyBytes := x509.MarshalPKCS1PrivateKey(privateKey)
-	if err := pem.Encode(privKeyFile, &pem.Block{
+	if err := pem.Encode(certKeyFile, &pem.Block{
 		Type:  "RSA PRIVATE KEY",
 		Bytes: privKeyBytes,
 	}); err != nil {
 		return fmt.Errorf("failed to write private key: %w", err)
 	}
 
-	// Save public key
+	// Save public key separately for signature verification
 	pubKeyPath := filepath.Join(wm.witnessDir, "witness-pub.pem")
 	pubKeyFile, err := os.Create(pubKeyPath)
 	if err != nil {
@@ -100,19 +132,40 @@ func (wm *WitnessManager) InitCertificate() error {
 
 // LoadCertificate loads the witness's key pair from disk
 func (wm *WitnessManager) LoadCertificate() error {
-	// Load private key
-	privKeyPath := filepath.Join(wm.witnessDir, "witness-cert.pem")
-	privKeyData, err := os.ReadFile(privKeyPath)
+	certPath := filepath.Join(wm.witnessDir, "witness-cert.pem")
+	certData, err := os.ReadFile(certPath)
 	if err != nil {
-		return fmt.Errorf("failed to read private key: %w", err)
+		return fmt.Errorf("failed to read certificate file: %w", err)
 	}
 
-	privKeyBlock, _ := pem.Decode(privKeyData)
-	if privKeyBlock == nil {
-		return fmt.Errorf("failed to decode private key PEM")
+	// Parse both certificate and private key from the PEM file
+	var certBlock, keyBlock *pem.Block
+	remaining := certData
+	
+	for {
+		block, rest := pem.Decode(remaining)
+		if block == nil {
+			break
+		}
+		
+		if block.Type == "CERTIFICATE" {
+			certBlock = block
+		} else if block.Type == "RSA PRIVATE KEY" {
+			keyBlock = block
+		}
+		
+		remaining = rest
 	}
 
-	privateKey, err := x509.ParsePKCS1PrivateKey(privKeyBlock.Bytes)
+	if certBlock == nil {
+		return fmt.Errorf("no certificate found in PEM file")
+	}
+	if keyBlock == nil {
+		return fmt.Errorf("no private key found in PEM file")
+	}
+
+	// Parse the private key
+	privateKey, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
 	if err != nil {
 		return fmt.Errorf("failed to parse private key: %w", err)
 	}
@@ -172,6 +225,43 @@ func (wm *WitnessManager) ObserveTree(logDir string) error {
 	}
 
 	return nil
+}
+
+// ObserveRemoteTree observes and signs a tree state received from a server
+// This is used in distributed mode where the witness doesn't have access to the main log
+// Returns the witnessed state including the signature
+func (wm *WitnessManager) ObserveRemoteTree(treeSize int64, treeHash string) (*WitnessedState, error) {
+	if wm.privateKey == nil {
+		if err := wm.LoadCertificate(); err != nil {
+			return nil, fmt.Errorf("certificate not loaded: %w", err)
+		}
+	}
+
+	// Create witnessed state
+	state := WitnessedState{
+		TreeSize:  treeSize,
+		TreeHash:  treeHash,
+		Timestamp: time.Now(),
+		WitnessID: wm.witnessID,
+	}
+
+	// Sign the state
+	message := fmt.Sprintf("%d:%s:%s", state.TreeSize, state.TreeHash, state.WitnessID)
+	hashed := sha256.Sum256([]byte(message))
+
+	signature, err := rsa.SignPKCS1v15(rand.Reader, wm.privateKey, 0, hashed[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign state: %w", err)
+	}
+
+	state.Signature = hex.EncodeToString(signature)
+
+	// Save to witness's append-only log
+	if err := wm.saveWitnessedState(state); err != nil {
+		return nil, fmt.Errorf("failed to save witnessed state: %w", err)
+	}
+
+	return &state, nil
 }
 
 // saveWitnessedState appends a witnessed state to the witness log
