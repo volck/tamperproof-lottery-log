@@ -88,11 +88,130 @@ Prove the log grew from size N to M without tampering:
   --proof consistency.json
 ```
 
+### Witness System with Certificate Authentication
+
+To prevent tampering by malicious operators, the system includes a witness mechanism where independent parties can observe and cryptographically sign tree states.
+
+#### Setting Up as a Witness
+
+Initialize yourself as a witness with a unique identifier:
+
+```bash
+./lottery-tlog witness-init --witness-id "alice-auditor"
+```
+
+This generates:
+- RSA 2048-bit key pair (witness certificate)
+- Public key for sharing with others
+- Stored in `.lottery-data/witnesses/alice-auditor/`
+
+#### Observing Tree States
+
+Record and sign the current tree state:
+
+```bash
+./lottery-tlog witness-observe --witness-id "alice-auditor"
+```
+
+Each observation creates a signed record containing:
+- Tree size (number of draws)
+- Tree hash (cryptographic commitment to all draws)
+- Timestamp of observation
+- Digital signature (proof you witnessed this state)
+
+#### Listing Witnessed States
+
+View all states you've observed:
+
+```bash
+./lottery-tlog witness-list --witness-id "alice-auditor"
+```
+
+#### Verifying Consistency Between States
+
+Verify the tree grew consistently (no rollbacks or tampering):
+
+```bash
+./lottery-tlog witness-verify-consistency --witness-id "alice-auditor" \
+  --old-index 1 --new-index 3
+```
+
+This proves:
+- The tree only appended new draws (no deletion)
+- Earlier draws remain unchanged
+- No history rewriting occurred
+
+#### Publishing Tree Hashes
+
+Log operators should regularly publish tree hashes:
+
+```bash
+./lottery-tlog publish-tree-hash
+```
+
+Publish this hash through multiple channels:
+- Company website
+- Social media
+- Newspaper announcements
+- Blockchain timestamp services
+
+This allows anyone to verify they're seeing the same log history.
+
+#### Security Properties
+
+**Without Witnesses:**
+- Malicious operator can delete `.lottery-data/` and regenerate favorable history
+- Single point of trust
+
+**With Witnesses:**
+- Operator must maintain consistency with all published hashes
+- Tampering detected immediately by consistency verification
+- Multiple independent witnesses create distributed trust
+- Cannot rewrite history without witnesses detecting it
+
+#### Best Practices for Witnesses
+
+1. **Observe regularly** - After each draw or at regular intervals
+2. **Save observations offline** - Backup witnessed states separately
+3. **Share public keys** - Let others verify your signatures
+4. **Cross-check** - Compare tree hashes with other witnesses
+5. **Archive proofs** - Keep consistency proofs for audit trails
+
 ### Custom Data Directory
 
 ```bash
 ./lottery-tlog --data-dir ./custom-lottery-data add-draw --draw-id "test-1" --random
 ```
+
+## Attack Vectors and Mitigations
+
+### Potential Attacks
+
+**1. Modify Draw + Hash Together**
+- Attack: Edit `draw-N.json` and recalculate `hash-N.bin`
+- Detection: Changes tree hash; witnesses detect inconsistency
+- Mitigation: Regular witness observations
+
+**2. Rollback Attack**
+- Attack: Delete recent draws and lower tree size
+- Detection: Consistency proofs fail; witnesses notice size decrease
+- Mitigation: Append-only enforcement + witness monitoring
+
+**3. Complete History Rewrite**
+- Attack: Delete all data and regenerate with favorable outcomes
+- Detection: New tree hash doesn't match witnessed states
+- Mitigation: External witnesses holding signed tree hashes
+
+### Defense in Depth
+
+The system provides **tamper-evidence**, not **tamper-proofing**:
+
+1. **Cryptographic hashing** - Any change detectable via tree hash
+2. **Inclusion proofs** - Prove specific draw was in tree at specific time
+3. **Consistency proofs** - Prove tree only grew (no deletions/changes)
+4. **Witness signatures** - Independent parties sign observed states
+5. **Public publication** - Tree hashes published to multiple channels
+6. **Gossip protocol** - Witnesses compare hashes to detect forks
 
 ## How It Works
 
