@@ -1,0 +1,3 @@
+# Lottery Transparency Log Configuration
+log_directory: ".lottery-data"
+log_level: "info"
