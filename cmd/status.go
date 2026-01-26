@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"lottery-tlog/tlog"
-
 	"github.com/spf13/cobra"
 )
 
@@ -61,20 +59,20 @@ func checkServerStatus(serverURL string) error {
 
 	type WitnessStatus struct {
 		*WitnessInfo
-		Online           bool      `json:"online"`
-		LastHeartbeat    time.Time `json:"last_heartbeat,omitempty"`
-		SecondsSinceHB   int       `json:"seconds_since_heartbeat,omitempty"`
+		Online         bool      `json:"online"`
+		LastHeartbeat  time.Time `json:"last_heartbeat,omitempty"`
+		SecondsSinceHB int       `json:"seconds_since_heartbeat,omitempty"`
 	}
 
 	var status struct {
-		Status              string            `json:"status"`
-		TreeSize            int64             `json:"tree_size"`
-		TreeHash            string            `json:"tree_hash"`
-		LastWitnessedSize   int64             `json:"last_witnessed_size"`
-		UnconfirmedCount    int64             `json:"unconfirmed_count"`
-		ActiveWitnesses     int               `json:"active_witnesses"`
-		Witnesses           []*WitnessStatus  `json:"witnesses"`
-		WitnessedTreeSizes  map[string]int    `json:"witnessed_tree_sizes"`
+		Status             string           `json:"status"`
+		TreeSize           int64            `json:"tree_size"`
+		TreeHash           string           `json:"tree_hash"`
+		LastWitnessedSize  int64            `json:"last_witnessed_size"`
+		UnconfirmedCount   int64            `json:"unconfirmed_count"`
+		ActiveWitnesses    int              `json:"active_witnesses"`
+		Witnesses          []*WitnessStatus `json:"witnesses"`
+		WitnessedTreeSizes map[string]int   `json:"witnessed_tree_sizes"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
@@ -84,7 +82,7 @@ func checkServerStatus(serverURL string) error {
 	// Display status
 	fmt.Println("\n📊 Lottery Transparency Log Status")
 	fmt.Println("═══════════════════════════════════")
-	
+
 	statusIcon := "✅"
 	statusText := status.Status
 	if status.Status == "pending_witnesses" {
@@ -98,15 +96,15 @@ func checkServerStatus(serverURL string) error {
 	}
 
 	fmt.Printf("%s Status: %s\n\n", statusIcon, statusText)
-	
+
 	fmt.Printf("🌲 Tree Information:\n")
 	fmt.Printf("   Total Draws: %d\n", status.TreeSize)
 	fmt.Printf("   Tree Hash: %s\n", status.TreeHash[:16]+"...")
-	
+
 	fmt.Printf("\n👁️  Witness Information:\n")
 	fmt.Printf("   Active Witnesses: %d\n", status.ActiveWitnesses)
 	fmt.Printf("   Last Witnessed Size: %d\n", status.LastWitnessedSize)
-	
+
 	if len(status.Witnesses) > 0 {
 		fmt.Printf("\n   Witness Details:\n")
 		for _, w := range status.Witnesses {
@@ -128,10 +126,10 @@ func checkServerStatus(serverURL string) error {
 			fmt.Printf("   • %s: Tree size %d (%s) - %s\n", w.WitnessID, w.LastTreeSize, timeStr, onlineStatus)
 		}
 	}
-	
+
 	if status.UnconfirmedCount > 0 {
 		fmt.Printf("\n⚠️  Unconfirmed Draws: %d\n", status.UnconfirmedCount)
-		fmt.Printf("   Draws %d-%d are waiting for witness verification\n", 
+		fmt.Printf("   Draws %d-%d are waiting for witness verification\n",
 			status.LastWitnessedSize+1, status.TreeSize)
 	} else if status.TreeSize > 0 {
 		fmt.Printf("\n✅ All draws have been witnessed\n")
@@ -141,17 +139,18 @@ func checkServerStatus(serverURL string) error {
 }
 
 func checkLocalStatus() error {
-	lotteryLog, err := tlog.NewLotteryLog(getDataDir(), logger)
+	lotteryLog, cleanup, err := createLotteryLog()
 	if err != nil {
 		return fmt.Errorf("failed to create lottery log: %w", err)
 	}
+	defer cleanup()
 
 	treeSize, err := lotteryLog.GetTreeSize()
 	if err != nil {
 		return fmt.Errorf("failed to get tree size: %w", err)
 	}
 
-	treeHash, err := lotteryLog.GetTreeHash()
+	treeHash, err := lotteryLog.GetTreeHash(treeSize)
 	if err != nil {
 		return fmt.Errorf("failed to get tree hash: %w", err)
 	}
@@ -177,7 +176,7 @@ func checkLocalStatus() error {
 	// Display status
 	fmt.Println("\n📊 Lottery Transparency Log Status")
 	fmt.Println("═══════════════════════════════════")
-	
+
 	statusIcon := "✅"
 	statusText := "Healthy"
 	if unconfirmedCount > 0 {
@@ -189,15 +188,19 @@ func checkLocalStatus() error {
 	}
 
 	fmt.Printf("%s Status: %s\n\n", statusIcon, statusText)
-	
+
 	fmt.Printf("🌲 Tree Information:\n")
 	fmt.Printf("   Total Draws: %d\n", treeSize)
-	fmt.Printf("   Tree Hash: %x\n", treeHash[:8])
-	
+	if len(treeHash) >= 8 {
+		fmt.Printf("   Tree Hash: %x\n", treeHash[:8])
+	} else {
+		fmt.Printf("   Tree Hash: (empty)\n")
+	}
+
 	fmt.Printf("\n👁️  Witness Information:\n")
 	fmt.Printf("   Active Witnesses: %d\n", len(cosignatures))
 	fmt.Printf("   Last Witnessed Size: %d\n", lastWitnessedSize)
-	
+
 	if len(cosignatures) > 0 {
 		fmt.Printf("\n   Witness Details:\n")
 		for _, cosig := range cosignatures {
@@ -215,10 +218,10 @@ func checkLocalStatus() error {
 			fmt.Printf("   • %s: Tree size %d (%s)\n", cosig.WitnessID, cosig.TreeSize, timeStr)
 		}
 	}
-	
+
 	if unconfirmedCount > 0 {
 		fmt.Printf("\n⚠️  Unconfirmed Draws: %d\n", unconfirmedCount)
-		fmt.Printf("   Draws %d-%d are waiting for witness verification\n", 
+		fmt.Printf("   Draws %d-%d are waiting for witness verification\n",
 			lastWitnessedSize+1, treeSize)
 	} else if treeSize > 0 {
 		fmt.Printf("\n✅ All draws have been witnessed\n")

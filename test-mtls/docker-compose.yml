@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: lottery-keycloak-test
+    environment:
+      # Admin credentials
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      
+      # Database (embedded H2 for testing)
+      KC_DB: dev-mem
+      
+      # Hostname
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_STRICT: false
+      KC_HOSTNAME_STRICT_HTTPS: false
+      
+      # HTTPS configuration
+      KC_HTTPS_CERTIFICATE_FILE: /opt/keycloak/conf/keycloak-cert.pem
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /opt/keycloak/conf/keycloak-key.pem
+      
+      # mTLS configuration
+      KC_HTTPS_CLIENT_AUTH: request  # Options: none, request, required
+      KC_HTTPS_TRUST_STORE_FILE: /opt/keycloak/conf/keycloak-truststore.jks
+      KC_HTTPS_TRUST_STORE_PASSWORD: changeit
+      
+      # Health checks
+      KC_HEALTH_ENABLED: true
+      KC_METRICS_ENABLED: true
+      
+      # Logging
+      KC_LOG_LEVEL: info
+      QUARKUS_LOG_CATEGORY__org_keycloak__LEVEL: info
+      
+    volumes:
+      # Mount certificates
+      - ./server/keycloak-cert.pem:/opt/keycloak/conf/keycloak-cert.pem:ro
+      - ./server/keycloak-key.pem:/opt/keycloak/conf/keycloak-key.pem:ro
+      - ./server/keycloak-truststore.jks:/opt/keycloak/conf/keycloak-truststore.jks:ro
+      
+      # Mount realm configuration (for auto-import)
+      - ./realm-config.json:/opt/keycloak/data/import/realm-config.json:ro
+      
+    ports:
+      - "8443:8443"   # HTTPS with mTLS
+      - "9000:9000"   # Health/metrics
+      
+    command:
+      - start-dev
+      - --import-realm
+      
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  lottery-tlog:
+    build:
+      context: ..
+      dockerfile: test-mtls/Dockerfile
+    container_name: lottery-tlog-server
+    environment:
+      # OIDC Configuration
+      OIDC_ISSUER_URL: "https://keycloak:8443/realms/lottery"
+      OIDC_CLIENT_ID: "lottery-server"
+      OIDC_CLIENT_SECRET: "server-secret-change-in-production"
+      OIDC_REDIRECT_URL: "https://lottery-tlog:8443/auth/callback"
+      ADMIN_EMAIL: "admin1@example.com"
+      
+    volumes:
+      # Mount certificates
+      - ./ca/ca-cert.pem:/app/certs/ca-cert.pem:ro
+      - ./server/keycloak-cert.pem:/app/certs/server-cert.pem:ro
+      - ./server/keycloak-key.pem:/app/certs/server-key.pem:ro
+      
+      # Mount config
+      - ./tlog-config.yaml:/app/config.yaml:ro
+      
+      # Persistent data
+      - lottery-data:/app/.lottery-data
+      
+    ports:
+      - "8080:8443"   # HTTPS server (mapped to host 8080 to avoid conflict)
+      
+    depends_on:
+      keycloak:
+        condition: service_healthy
+        
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:8443/api/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+      
+    command: ["./lottery-tlog", "server"]
+
+  # Optional: PostgreSQL for persistent storage
+  postgres:
+    image: postgres:15-alpine
+    container_name: lottery-keycloak-db
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: keycloak
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    profiles:
+      - production
+
+volumes:
+  keycloak-db-data:
+    driver: local
+  lottery-data:
+    driver: local
+
+networks:
+  default:
+    name: lottery-test-network

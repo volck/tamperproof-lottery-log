@@ -2,6 +2,19 @@
 log_directory: ".lottery-data"
 log_level: "info"
 
+# Storage backend: "file" or "oracle"
+storage_backend: "file"
+
+# Oracle Database Configuration
+oracle:
+  # Connection string format: user/password@hostname:port/service_name
+  # Example: lottery_user/secure_password@localhost:1521/ORCLPDB1
+  connection_string: "${ORACLE_CONNECTION_STRING}"
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: "5m"
+  conn_max_idle_time: "30s"
+
 # Server configuration
 server:
   host: "localhost"
@@ -10,3 +23,27 @@ server:
     cert_file: "certs/server-cert.pem"
     key_file: "certs/server-key.pem"
     ca_file: "certs/ca-cert.pem"
+  
+  # Authentication method: "oidc" (default), "mtls", or "oidc-mtls-hybrid"
+  auth_method: "oidc"
+  
+  # OIDC Configuration (for OpenID Connect authentication)
+  oidc:
+    enabled: true
+    issuer_url: "${OIDC_ISSUER_URL}"  # e.g., https://keycloak.example.com/realms/lottery
+    client_id: "${OIDC_CLIENT_ID}"
+    client_secret: "${OIDC_CLIENT_SECRET}"
+    redirect_url: "${OIDC_REDIRECT_URL}"  # e.g., https://localhost:8443/auth/callback
+    
+    # X.509 Client Certificate Authentication for Keycloak Token Acquisition
+    # When enabled, clients must present a certificate to get tokens from Keycloak
+    # Then use JWT bearer tokens for API calls (hybrid mTLS + OIDC approach)
+    require_client_cert_for_token: false  # Set to true for Keycloak X.509 authentication
+    
+    # Allowed domains for email-based access control (optional)
+    allowed_domains: []
+    # Admin email addresses (for write operations)
+    admin_emails:
+      - "${ADMIN_EMAIL}"
+    # Witness email addresses (for witness operations)
+    witness_emails: []

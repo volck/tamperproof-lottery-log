@@ -17,7 +17,7 @@ var publishTreeHashCmd = &cobra.Command{
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dataDir := viper.GetString("log_directory")
-		
+
 		// Use NewLotteryLog to properly create the log
 		ll, err := tlog.NewLotteryLog(dataDir, slog.Default())
 		if err != nil {
@@ -35,11 +35,7 @@ var publishTreeHashCmd = &cobra.Command{
 			return fmt.Errorf("no draws in the log yet")
 		}
 
-		treeHash, err := ll.GetTreeHash()
-		if err != nil {
-			slog.Error("Failed to get tree hash", "error", err)
-			return err
-		}
+		treeHash, err := ll.GetTreeHash(treeSize)
 
 		hashHex := fmt.Sprintf("%x", treeHash[:])
 

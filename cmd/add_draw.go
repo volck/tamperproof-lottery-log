@@ -1,30 +1,39 @@
 package cmd
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"lottery-tlog/tlog"
-	"math/rand"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	drawID      string
-	position    int
-	maxPosition int
-	rngHash     string
-	drawType    string
-	randomDraw  bool
+	seqNo      int
+	ip         string
+	severity   string
+	code       int
+	text       string
+	remoteIP   string
+	game       int
+	draw       int
+	subdraw    int
+	valuesFile string
+	jsonFile   string
 )
 
 var addDrawCmd = &cobra.Command{
 	Use:   "add-draw",
 	Short: "Add a new lottery draw to the log",
-	Long: `Add a new lottery draw to the transparency log.
+	Long: `Add a new lottery event to the transparency log.
 	
-You can either specify the draw details manually or use --random 
-to generate a random draw for testing purposes.`,
+You can provide the event details via command-line flags or load from a JSON file.
+For random value generation (code 300), use --values-file with a list of integers.`,
 	SilenceUsage: true,
 	RunE:         runAddDraw,
 }
@@ -32,87 +41,119 @@ to generate a random draw for testing purposes.`,
 func init() {
 	rootCmd.AddCommand(addDrawCmd)
 
-	addDrawCmd.Flags().StringVar(&drawID, "draw-id", "", "Unique draw identifier (required)")
-	addDrawCmd.Flags().IntVar(&position, "position", 0, "Drawn position (1 to max-position)")
-	addDrawCmd.Flags().IntVar(&maxPosition, "max-position", 100, "Maximum position (default 100)")
-	addDrawCmd.Flags().StringVar(&rngHash, "rng-hash", "", "RNG hash used to generate position (hex string)")
-	addDrawCmd.Flags().StringVar(&drawType, "type", "regular", "Draw type (regular, special, etc.)")
-	addDrawCmd.Flags().BoolVar(&randomDraw, "random", false, "Generate random draw data")
-
-	addDrawCmd.MarkFlagRequired("draw-id")
+	addDrawCmd.Flags().IntVar(&seqNo, "seqno", 0, "Sequence number (required)")
+	addDrawCmd.Flags().StringVar(&ip, "ip", "", "Source IP address (required)")
+	addDrawCmd.Flags().StringVar(&severity, "severity", "info", "Event severity")
+	addDrawCmd.Flags().IntVar(&code, "code", 0, "Message code (required)")
+	addDrawCmd.Flags().StringVar(&text, "text", "", "Message text (required)")
+	addDrawCmd.Flags().StringVar(&remoteIP, "remote-ip", "", "Remote IP address (for codes requiring it)")
+	addDrawCmd.Flags().IntVar(&game, "game", 0, "Game number (for codes requiring game properties)")
+	addDrawCmd.Flags().IntVar(&draw, "draw", 0, "Draw number (for codes requiring game properties)")
+	addDrawCmd.Flags().IntVar(&subdraw, "subdraw", 0, "Subdraw number (for codes requiring game properties)")
+	addDrawCmd.Flags().StringVar(&valuesFile, "values-file", "", "JSON file with values array")
+	addDrawCmd.Flags().StringVar(&jsonFile, "json-file", "", "Load complete draw from JSON file")
 }
 
 func runAddDraw(cmd *cobra.Command, args []string) error {
-	lotteryLog, err := tlog.NewLotteryLog(getDataDir(), logger)
+	lotteryLog, cleanup, err := createLotteryLog()
 	if err != nil {
 		return fmt.Errorf("failed to create lottery log: %w", err)
 	}
+	defer cleanup()
 
-	// Check if witnesses exist and have cosigned the current tree state
-	currentSize, err := lotteryLog.GetTreeSize()
-	if err != nil {
-		return fmt.Errorf("failed to get tree size: %w", err)
-	}
+	var drawEvent tlog.LotteryDraw
 
-	if currentSize > 0 {
-		cosignatures, err := lotteryLog.GetLatestWitnessCosignatures()
+	// Load from JSON file if provided
+	if jsonFile != "" {
+		data, err := os.ReadFile(jsonFile)
 		if err != nil {
-			return fmt.Errorf("failed to get witness cosignatures: %w", err)
+			return fmt.Errorf("failed to read JSON file: %w", err)
+		}
+		if err := json.Unmarshal(data, &drawEvent); err != nil {
+			return fmt.Errorf("failed to parse JSON: %w", err)
+		}
+	} else {
+		// Build from command-line flags
+		if ip == "" || text == "" {
+			return fmt.Errorf("--ip and --text are required (or use --json-file)")
 		}
 
-		if len(cosignatures) == 0 {
-			return fmt.Errorf("cannot add draw: no witnesses have cosigned the current tree state (size=%d). At least one witness must observe and sign the current state before adding new draws", currentSize)
+		message := tlog.Message{
+			Code:     code,
+			Text:     text,
+			RemoteIP: remoteIP,
 		}
 
-		logger.Info("Witnesses verified", "count", len(cosignatures), "tree_size", currentSize)
+		// Add game properties if any are specified
+		if game > 0 || draw > 0 || subdraw > 0 {
+			message.GameProperties = &tlog.GameProperties{
+				Game:    game,
+				Draw:    draw,
+				Subdraw: subdraw,
+			}
+		}
+
+		// Load values from file if provided
+		if valuesFile != "" {
+			data, err := os.ReadFile(valuesFile)
+			if err != nil {
+				return fmt.Errorf("failed to read values file: %w", err)
+			}
+			var values []int
+			if err := json.Unmarshal(data, &values); err != nil {
+				return fmt.Errorf("failed to parse values: %w", err)
+			}
+			message.Values = values
+		}
+
+		// Generate MAC using HMAC-SHA256
+		drawData, _ := json.Marshal(message)
+		mac := generateMAC(drawData, fmt.Sprintf("%d-%s", seqNo, ip))
+
+		drawEvent = tlog.LotteryDraw{
+			Timestamp: time.Now(),
+			SeqNo:     seqNo,
+			IP:        ip,
+			Severity:  severity,
+			Message:   message,
+			MAC:       mac,
+		}
 	}
 
-	// Generate random draw if requested
-	if randomDraw {
-		// Generate RNG hash from timestamp
-		seed := time.Now().UnixNano()
-		rngHash = fmt.Sprintf("%016x", seed)
-		
-		rng := rand.New(rand.NewSource(seed))
-		position = rng.Intn(maxPosition) + 1
-		logger.Info("Generated random draw", "position", position, "max_position", maxPosition, "rng_hash", rngHash)
-	} else if position == 0 {
-		return fmt.Errorf("either provide --position or use --random flag")
-	}
+	logger.Info("Adding draw event",
+		"seqno", drawEvent.SeqNo,
+		"code", drawEvent.Message.Code,
+		"timestamp", drawEvent.Timestamp)
 
-	if position < 1 || position > maxPosition {
-		return fmt.Errorf("position must be between 1 and %d", maxPosition)
-	}
-	
-	if rngHash == "" && randomDraw {
-		return fmt.Errorf("rng hash should have been generated")
-	}
-
-	draw := tlog.LotteryDraw{
-		DrawID:      drawID,
-		Timestamp:   time.Now(),
-		Position:    position,
-		MaxPosition: maxPosition,
-		RNGHash:     rngHash,
-		DrawType:    drawType,
-	}
-
-	if err := lotteryLog.AddDraw(draw); err != nil {
+	if err := lotteryLog.AddDraw(drawEvent); err != nil {
 		return fmt.Errorf("failed to add draw: %w", err)
 	}
 
 	size, _ := lotteryLog.GetTreeSize()
-	treeHash, _ := lotteryLog.GetTreeHash()
+	hash, _ := lotteryLog.GetTreeHash(size)
 
-	fmt.Printf("✓ Draw added successfully\n")
-	fmt.Printf("  Draw ID: %s\n", draw.DrawID)
-	fmt.Printf("  Position: %d of %d\n", draw.Position, draw.MaxPosition)
-	if draw.RNGHash != "" {
-		fmt.Printf("  RNG Hash: %s\n", draw.RNGHash)
+	fmt.Println("✓ Draw event added successfully")
+	fmt.Printf("  Seq No: %d\n", drawEvent.SeqNo)
+	fmt.Printf("  Code: %d\n", drawEvent.Message.Code)
+	fmt.Printf("  Text: %s\n", drawEvent.Message.Text)
+	if drawEvent.Message.GameProperties != nil {
+		fmt.Printf("  Game: %d, Draw: %d, Subdraw: %d\n",
+			drawEvent.Message.GameProperties.Game,
+			drawEvent.Message.GameProperties.Draw,
+			drawEvent.Message.GameProperties.Subdraw)
 	}
 	fmt.Printf("  Index: %d\n", size-1)
 	fmt.Printf("  Tree Size: %d\n", size)
-	fmt.Printf("  Tree Hash: %x\n", treeHash[:8])
+	if len(hash) >= 8 {
+		fmt.Printf("  Tree Hash: %x\n", hash[:8])
+	}
 
 	return nil
+}
+
+// generateMAC generates a message authentication code using HMAC-SHA256
+func generateMAC(data []byte, key string) string {
+	h := hmac.New(sha256.New, []byte(key))
+	h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
 }

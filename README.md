@@ -5,18 +5,80 @@ A proof of concept demonstrating the use of Go's transparency log implementation
 ## Features
 
 - **Transparency Log**: Uses Merkle trees to ensure integrity of lottery draw records
+- **Multiple Storage Backends**: 
+  - File-based storage for development/testing
+  - Oracle 19c blockchain tables for production with cryptographic signing
 - **Verifiable**: Cryptographic proofs allow anyone to verify draws without the full log
 - **Tamper-Proof**: Any modification to historical draws is immediately detectable
 - **Positional Draws**: Records draws as positions (1 to N) with RNG hash tracking
+- **Witness System**: External witnesses cosign tree states for additional security
 - **CLI Interface**: Built with Cobra for easy command-line interaction
 - **Configuration**: Viper-based configuration management
 - **Structured Logging**: Uses slog for clear, structured logs
 
+## Storage Backends
+
+### File-Based (Default)
+- Simple file-system storage
+- Good for development and testing
+- No external dependencies
+
+### Oracle 19c Blockchain Tables
+- **Immutable blockchain tables** with Oracle's cryptographic signing
+- **Built-in tamper detection** at database level
+- **Production-grade** with ACID guarantees
+- **Automatic row signing** using SHA2_512
+- See [Oracle Quick Start Guide](oracle/QUICKSTART.md) for setup
+
 ## Installation
 
+### File-Based Backend (No Oracle)
+
 ```bash
+# Install dependencies
 go mod download
+
+# Build without Oracle support (default)
 go build -o lottery-tlog
+
+# The binary will use file-based storage by default
+```
+
+### Oracle Backend (Optional)
+
+If you want to use Oracle 19c blockchain tables:
+
+```bash
+# 1. Install Oracle Instant Client (required for compilation)
+# See oracle/QUICKSTART.md for detailed instructions
+
+# 2. Build with Oracle support
+go build -tags oracle -o lottery-tlog
+
+# 3. Configure Oracle connection in config.yaml
+# storage_backend: "oracle"
+# oracle:
+#   connection_string: "user/password@host:port/service"
+```
+
+**Note**: The default build (`go build`) does NOT require Oracle client libraries. Oracle support is optional and only needed if you want to use Oracle blockchain tables in production.
+
+## Configuration
+
+Edit `config.yaml`:
+
+```yaml
+# Storage backend: "file" or "oracle"
+storage_backend: "file"  # Use "oracle" for blockchain tables
+
+# File backend uses log_directory
+log_directory: ".lottery-data"
+
+# Oracle backend configuration (only needed if using Oracle)
+oracle:
+  connection_string: "${ORACLE_CONNECTION_STRING}"
+  max_open_conns: 25
+  # ... see config.yaml for full options
 ```
 
 ## Usage
@@ -275,12 +337,48 @@ The verify command:
 
 ## Configuration
 
+## Configuration
+
 Edit `config.yaml`:
 
 ```yaml
+# Storage backend: "file" (default) or "oracle"
+storage_backend: "file"
+
 log_directory: ".lottery-data"
 log_level: "info"  # debug, info, warn, error
+
+# Oracle configuration (when using Oracle backend)
+oracle:
+  connection_string: "user/password@hostname:1521/service_name"
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: "5m"
+  conn_max_idle_time: "30s"
+
+server:
+  host: "localhost"
+  port: 8443
+  tls:
+    cert_file: "certs/server-cert.pem"
+    key_file: "certs/server-key.pem"
+    ca_file: "certs/ca-cert.pem"
 ```
+
+### Oracle Backend Setup
+
+For production deployments with Oracle 19c blockchain tables:
+
+1. **Quick Start**: See [oracle/QUICKSTART.md](oracle/QUICKSTART.md) for 5-minute setup
+2. **Detailed Docs**: See [oracle/README.md](oracle/README.md) for comprehensive guide
+3. **Schema Setup**: Run `sqlplus user/pass@connection @oracle/schema.sql`
+
+Benefits of Oracle backend:
+- Database-enforced immutability
+- Automatic cryptographic signing (SHA2_512)
+- Built-in tamper detection
+- ACID guarantees
+- Enterprise-grade backup/recovery
 
 ## Project Structure
 
@@ -288,17 +386,30 @@ log_level: "info"  # debug, info, warn, error
 .
 ├── main.go                 # Entry point
 ├── cmd/
-│   ├── root.go            # Root command with Viper config
+│   ├── root.go            # Root command with backend selection
 │   ├── add_draw.go        # Add draw command
 │   ├── verify.go          # Verify integrity command
 │   ├── list.go            # List draws command
 │   ├── prove_inclusion.go # Inclusion proof generation/verification
 │   ├── prove_consistency.go # Consistency proof generation/verification
-│   └── proof_utils.go     # Shared proof utilities
+│   ├── witness_*.go       # Witness system commands
+│   └── server.go          # TLS server for witness communication
 ├── tlog/
-│   └── lottery_log.go     # Transparency log implementation
+│   ├── lottery_log.go     # File-based transparency log
+│   ├── adapter.go         # Storage backend adapter
+│   └── witness.go         # Witness verification logic
+├── oracle/
+│   ├── connection.go      # Oracle database connection
+│   ├── lottery_log.go     # Oracle blockchain implementation
+│   ├── schema.sql         # Database schema with blockchain tables
+│   ├── SETUP.sql          # Setup instructions
+│   ├── QUICKSTART.md      # Quick start guide
+│   └── README.md          # Comprehensive documentation
+├── server/
+│   └── server.go          # TLS server implementation
 ├── config.yaml            # Configuration file
-└── .lottery-data/         # Data directory (created automatically)
+├── certs/                 # TLS certificates
+└── .lottery-data/         # Data directory (file backend only)
     ├── draw-*.json        # Draw records
     ├── hash-*.bin         # Cryptographic hashes
     └── tree-size.txt      # Current tree size

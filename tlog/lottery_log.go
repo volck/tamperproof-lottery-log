@@ -11,14 +11,132 @@ import (
 	"golang.org/x/mod/sumdb/tlog"
 )
 
-// LotteryDraw represents a single lottery draw event
+// GameProperties represents game identifiers for lottery draws
+type GameProperties struct {
+	Game    int `json:"game"`
+	Draw    int `json:"draw"`
+	Subdraw int `json:"subdraw"`
+}
+
+// DrawParameters represents parameters for random number generation
+type DrawParameters struct {
+	LowBound        int   `json:"low_bound"`
+	HighBound       int   `json:"high_bound"`
+	PutBack         bool  `json:"put_back"`
+	UseDistribution bool  `json:"use_distribution"`
+	Distribution    []int `json:"distribution,omitempty"`
+}
+
+// DrawChecks represents binary and config checksums
+type DrawChecks struct {
+	BinaryChecksum  string    `json:"binary_checksum"`
+	BinaryTimestamp time.Time `json:"binary_timestamp"`
+	ConfigFilename  string    `json:"config_filename"`
+	ConfigTimestamp time.Time `json:"config_timestamp"`
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for DrawChecks
+// to handle multiple timestamp formats
+func (dc *DrawChecks) UnmarshalJSON(data []byte) error {
+	type Alias DrawChecks
+	aux := &struct {
+		BinaryTimestamp string `json:"binary_timestamp"`
+		ConfigTimestamp string `json:"config_timestamp"`
+		*Alias
+	}{
+		Alias: (*Alias)(dc),
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	// Try multiple timestamp formats
+	formats := []string{
+		time.RFC3339,                   // 2006-01-02T15:04:05Z07:00
+		time.RFC3339Nano,               // 2006-01-02T15:04:05.999999999Z07:00
+		"2006-01-02T15:04:05.999-0700", // 2025-10-15T09:21:17.318+0200
+		"2006-01-02T15:04:05-0700",     // 2025-10-15T09:21:17+0200
+	}
+
+	var err error
+	for _, format := range formats {
+		dc.BinaryTimestamp, err = time.Parse(format, aux.BinaryTimestamp)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("unable to parse binary_timestamp %q: %w", aux.BinaryTimestamp, err)
+	}
+
+	for _, format := range formats {
+		dc.ConfigTimestamp, err = time.Parse(format, aux.ConfigTimestamp)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("unable to parse config_timestamp %q: %w", aux.ConfigTimestamp, err)
+	}
+
+	return nil
+}
+
+// Message represents the lottery event message with different structures based on code
+type Message struct {
+	Code            int             `json:"code"`
+	Text            string          `json:"text"`
+	RemoteIP        string          `json:"remote_ip,omitempty"`
+	Values          []int           `json:"values,omitempty"`
+	String          string          `json:"string,omitempty"`
+	Parameters      *DrawParameters `json:"parameters,omitempty"`
+	Checks          *DrawChecks     `json:"checks,omitempty"`
+	*GameProperties `json:",omitempty,inline"`
+}
+
+// LotteryDraw represents a single lottery draw event following the log schema
 type LotteryDraw struct {
-	DrawID      string    `json:"draw_id"`
-	Timestamp   time.Time `json:"timestamp"`
-	Position    int       `json:"position"`
-	MaxPosition int       `json:"max_position"`
-	RNGHash     string    `json:"rng_hash"` // Hash used by RNG to generate position
-	DrawType    string    `json:"draw_type"`
+	Timestamp time.Time `json:"timestamp"`
+	SeqNo     int       `json:"seqno"`
+	IP        string    `json:"ip"`
+	Severity  string    `json:"severity"`
+	Message   Message   `json:"message"`
+	MAC       string    `json:"mac"`
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for LotteryDraw
+// to handle multiple timestamp formats (+0200, +02:00, Z)
+func (ld *LotteryDraw) UnmarshalJSON(data []byte) error {
+	type Alias LotteryDraw
+	aux := &struct {
+		Timestamp string `json:"timestamp"`
+		*Alias
+	}{
+		Alias: (*Alias)(ld),
+	}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	// Try multiple timestamp formats
+	formats := []string{
+		time.RFC3339,                   // 2006-01-02T15:04:05Z07:00
+		time.RFC3339Nano,               // 2006-01-02T15:04:05.999999999Z07:00
+		"2006-01-02T15:04:05.999-0700", // 2025-10-15T09:21:17.318+0200
+		"2006-01-02T15:04:05-0700",     // 2025-10-15T09:21:17+0200
+	}
+
+	var err error
+	for _, format := range formats {
+		ld.Timestamp, err = time.Parse(format, aux.Timestamp)
+		if err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("unable to parse timestamp %q: %w", aux.Timestamp, err)
 }
 
 // WitnessCosignature represents a witness's signature on a tree state
@@ -50,7 +168,10 @@ func NewLotteryLog(dataDir string, logger *slog.Logger) (*LotteryLog, error) {
 
 // AddDraw adds a new lottery draw to the transparency log
 func (l *LotteryLog) AddDraw(draw LotteryDraw) error {
-	l.logger.Info("Adding lottery draw", "draw_id", draw.DrawID, "timestamp", draw.Timestamp)
+	l.logger.Info("Adding lottery draw",
+		"seqno", draw.SeqNo,
+		"code", draw.Message.Code,
+		"timestamp", draw.Timestamp)
 
 	// Serialize the draw
 	data, err := json.Marshal(draw)
@@ -73,7 +194,7 @@ func (l *LotteryLog) AddDraw(draw LotteryDraw) error {
 	// Compute and store the hashes using tlog.StoredHashes
 	// First, we need a reader for existing hashes
 	hr := &hashReader{dataDir: l.dataDir, size: size}
-	
+
 	storedHashes, err := tlog.StoredHashes(size, data, hr)
 	if err != nil {
 		return fmt.Errorf("failed to compute stored hashes: %w", err)
@@ -171,7 +292,7 @@ func (l *LotteryLog) VerifyIntegrity() error {
 
 		// Compute the hash of the actual stored data
 		actualRecordHash := tlog.RecordHash(data)
-		
+
 		// Read the stored hash for this record (leaf hash is first)
 		startIndex := tlog.StoredHashIndex(0, i)
 		hashPath := filepath.Join(l.dataDir, fmt.Sprintf("hash-%d.bin", startIndex))
@@ -179,13 +300,13 @@ func (l *LotteryLog) VerifyIntegrity() error {
 		if err != nil {
 			return fmt.Errorf("failed to read stored hash for draw %d: %w", i, err)
 		}
-		
+
 		var storedRecordHash tlog.Hash
 		copy(storedRecordHash[:], storedHashData)
-		
+
 		// Verify the data hash matches the stored hash
 		if actualRecordHash != storedRecordHash {
-			return fmt.Errorf("hash mismatch at draw %d: expected %x, got %x", 
+			return fmt.Errorf("hash mismatch at draw %d: expected %x, got %x",
 				i, storedRecordHash[:8], actualRecordHash[:8])
 		}
 	}
@@ -203,15 +324,15 @@ func (l *LotteryLog) VerifyIntegrity() error {
 		l.logger.Warn("Failed to write tree hash", "error", err)
 	}
 
-	l.logger.Info("Integrity verification successful", 
-		"size", size, 
+	l.logger.Info("Integrity verification successful",
+		"size", size,
 		"tree_hash", fmt.Sprintf("%x", th[:8]))
 
 	return nil
 }
 
-// GetTreeHash returns the current Merkle tree root hash
-func (l *LotteryLog) GetTreeHash() (tlog.Hash, error) {
+// GetTreeHashRaw returns the current Merkle tree root hash as raw bytes
+func (l *LotteryLog) GetTreeHashRaw() (tlog.Hash, error) {
 	size, err := l.getTreeSize()
 	if err != nil {
 		return tlog.Hash{}, fmt.Errorf("failed to get tree size: %w", err)
@@ -342,4 +463,32 @@ func (l *LotteryLog) GetLatestWitnessCosignatures() ([]WitnessCosignature, error
 	}
 
 	return l.GetWitnessCosignatures(size)
+}
+
+// GetTreeHash returns the tree hash for a given tree size
+func (l *LotteryLog) GetTreeHash(size int64) (string, error) {
+	if size == 0 {
+		return "", nil
+	}
+
+	hr := &hashReader{dataDir: l.dataDir, size: size}
+	th, err := tlog.TreeHash(size, hr)
+	if err != nil {
+		return "", fmt.Errorf("failed to compute tree hash: %w", err)
+	}
+
+	return fmt.Sprintf("%x", th[:]), nil
+}
+
+// ListDraws returns draws in a specified range
+func (l *LotteryLog) ListDraws(startIndex, endIndex int64) ([]*LotteryDraw, error) {
+	draws := make([]*LotteryDraw, 0, endIndex-startIndex)
+	for i := startIndex; i < endIndex; i++ {
+		draw, err := l.GetDraw(i)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get draw %d: %w", i, err)
+		}
+		draws = append(draws, draw)
+	}
+	return draws, nil
 }

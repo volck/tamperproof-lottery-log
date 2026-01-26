@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"lottery-tlog/tlog"
 
 	"github.com/spf13/cobra"
 )
@@ -25,10 +24,11 @@ func init() {
 }
 
 func runList(cmd *cobra.Command, args []string) error {
-	lotteryLog, err := tlog.NewLotteryLog(getDataDir(), logger)
+	lotteryLog, cleanup, err := createLotteryLog()
 	if err != nil {
 		return fmt.Errorf("failed to create lottery log: %w", err)
 	}
+	defer cleanup()
 
 	size, err := lotteryLog.GetTreeSize()
 	if err != nil {
@@ -40,29 +40,44 @@ func runList(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	draws, err := lotteryLog.ListAllDraws()
+	draws, err := lotteryLog.ListDraws(0, size)
 	if err != nil {
 		return fmt.Errorf("failed to list draws: %w", err)
 	}
 
-	fmt.Printf("Total draws: %d\n\n", size)
+	fmt.Printf("Total events: %d\n\n", size)
 
 	for i, draw := range draws {
-		fmt.Printf("[%d] Draw ID: %s\n", i, draw.DrawID)
-		fmt.Printf("    Type: %s\n", draw.DrawType)
-		fmt.Printf("    Position: %d of %d\n", draw.Position, draw.MaxPosition)
-		if draw.RNGHash != "" {
-			fmt.Printf("    RNG Hash: %s\n", draw.RNGHash)
+		fmt.Printf("[%d] Seq No: %d | Code: %d\n", i, draw.SeqNo, draw.Message.Code)
+		fmt.Printf("    Text: %s\n", draw.Message.Text)
+		fmt.Printf("    IP: %s", draw.IP)
+		if draw.Message.RemoteIP != "" {
+			fmt.Printf(" | Remote: %s", draw.Message.RemoteIP)
 		}
+		fmt.Println()
+
+		if draw.Message.GameProperties != nil {
+			fmt.Printf("    Game: %d, Draw: %d, Subdraw: %d\n",
+				draw.Message.GameProperties.Game,
+				draw.Message.GameProperties.Draw,
+				draw.Message.GameProperties.Subdraw)
+		}
+
+		if len(draw.Message.Values) > 0 {
+			fmt.Printf("    Values: %v\n", draw.Message.Values)
+		}
+
 		if verbose {
 			fmt.Printf("    Timestamp: %s\n", draw.Timestamp.Format("2006-01-02 15:04:05"))
+			fmt.Printf("    Severity: %s\n", draw.Severity)
+			fmt.Printf("    MAC: %s\n", draw.MAC[:16]+"...")
 		}
 		fmt.Println()
 	}
 
-	treeHash, err := lotteryLog.GetTreeHash()
-	if err == nil {
-		fmt.Printf("Current tree hash: %x\n", treeHash[:16])
+	treeHash, err := lotteryLog.GetTreeHash(size)
+	if err == nil && len(treeHash) >= 16 {
+		fmt.Printf("Current tree hash: %s\n", treeHash[:16])
 	}
 
 	return nil

@@ -1,0 +1,37 @@
+# Lottery Transparency Log Configuration - Docker Test Environment
+log_directory: "/app/.lottery-data"
+log_level: "info"
+
+# Storage backend
+storage_backend: "file"
+
+# Server configuration
+server:
+  host: "0.0.0.0"  # Listen on all interfaces in Docker
+  port: 8443
+  tls:
+    cert_file: "/app/certs/server-cert.pem"
+    key_file: "/app/certs/server-key.pem"
+    ca_file: "/app/certs/ca-cert.pem"
+  
+  # Authentication method
+  auth_method: "oidc"
+  
+  # OIDC Configuration
+  oidc:
+    enabled: true
+    # Use 'keycloak' hostname (Docker service name)
+    issuer_url: "https://keycloak:8443/realms/lottery"
+    client_id: "lottery-server"
+    client_secret: "server-secret-change-in-production"
+    # Use 'lottery-tlog' hostname (Docker service name)
+    redirect_url: "https://localhost:8080/auth/callback"
+    
+    require_client_cert_for_token: false
+    
+    # Admin and witness emails
+    admin_emails:
+      - "admin1@example.com"
+    witness_emails:
+      - "witness1@example.com"
+      - "witness2@example.com"

@@ -11,12 +11,12 @@ import (
 )
 
 var (
-	drawIndex    int64
-	outputFile   string
-	proofFile    string
-	drawFile     string
-	treeSize     int64
-	treeHashHex  string
+	drawIndex   int64
+	outputFile  string
+	proofFile   string
+	drawFile    string
+	treeSize    int64
+	treeHashHex string
 )
 
 var proveInclusionCmd = &cobra.Command{
@@ -60,10 +60,11 @@ func init() {
 }
 
 func runProveInclusion(cmd *cobra.Command, args []string) error {
-	lotteryLog, err := tlog.NewLotteryLog(getDataDir(), logger)
+	lotteryLog, cleanup, err := createLotteryLog()
 	if err != nil {
 		return fmt.Errorf("failed to create lottery log: %w", err)
 	}
+	defer cleanup()
 
 	size, err := lotteryLog.GetTreeSize()
 	if err != nil {
@@ -87,18 +88,18 @@ func runProveInclusion(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to generate proof: %w", err)
 	}
 
-	treeHash, err := lotteryLog.GetTreeHash()
+	treeHash, err := lotteryLog.GetTreeHash(size)
 	if err != nil {
 		return fmt.Errorf("failed to get tree hash: %w", err)
 	}
 
 	// Create proof output
 	proofOutput := struct {
-		Draw      *tlog.LotteryDraw `json:"draw"`
-		Index     int64              `json:"index"`
-		TreeSize  int64              `json:"tree_size"`
-		TreeHash  string             `json:"tree_hash"`
-		Proof     []string           `json:"proof"`
+		Draw     *tlog.LotteryDraw `json:"draw"`
+		Index    int64             `json:"index"`
+		TreeSize int64             `json:"tree_size"`
+		TreeHash string            `json:"tree_hash"`
+		Proof    []string          `json:"proof"`
 	}{
 		Draw:     draw,
 		Index:    drawIndex,
@@ -180,8 +181,8 @@ func runVerifyInclusion(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("✓ Inclusion proof verified successfully\n")
-	fmt.Printf("  Draw ID: %s\n", draw.DrawID)
-	fmt.Printf("  Position: %d of %d\n", draw.Position, draw.MaxPosition)
+	fmt.Printf("  Seq No: %d\n", draw.SeqNo)
+	fmt.Printf("  Code: %d | %s\n", draw.Message.Code, draw.Message.Text)
 	fmt.Printf("  Index: %d\n", drawIndex)
 	fmt.Printf("  Tree Size: %d\n", treeSize)
 

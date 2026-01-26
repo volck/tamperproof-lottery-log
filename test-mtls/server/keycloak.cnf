@@ -1,0 +1,22 @@
+[ req ]
+default_bits = 2048
+prompt = no
+default_md = sha256
+req_extensions = req_ext
+distinguished_name = dn
+
+[ dn ]
+C = US
+ST = Test
+L = Test
+O = LotteryLog Test
+OU = Keycloak
+CN = localhost
+
+[ req_ext ]
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.1 = localhost
+DNS.2 = keycloak
+IP.1 = 127.0.0.1

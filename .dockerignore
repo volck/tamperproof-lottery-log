@@ -1,0 +1,26 @@
+# Ignore test and development files
+test-mtls/
+docs/
+.git/
+.gitignore
+
+# Ignore data directories
+.lottery-data/
+*.log
+
+# Ignore build artifacts
+lottery-tlog
+*.exe
+
+# Ignore test certificates (will be mounted)
+certs/
+
+# Ignore temp files
+*.tmp
+*.swp
+*~
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.iml

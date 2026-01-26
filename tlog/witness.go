@@ -65,8 +65,8 @@ func (wm *WitnessManager) InitCertificate() error {
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			CommonName:   wm.witnessID,
-			Organization: []string{"Lottery Transparency Log"},
+			CommonName:         wm.witnessID,
+			Organization:       []string{"Lottery Transparency Log"},
 			OrganizationalUnit: []string{"Witness"},
 		},
 		NotBefore:             time.Now(),
@@ -141,19 +141,19 @@ func (wm *WitnessManager) LoadCertificate() error {
 	// Parse both certificate and private key from the PEM file
 	var certBlock, keyBlock *pem.Block
 	remaining := certData
-	
+
 	for {
 		block, rest := pem.Decode(remaining)
 		if block == nil {
 			break
 		}
-		
+
 		if block.Type == "CERTIFICATE" {
 			certBlock = block
 		} else if block.Type == "RSA PRIVATE KEY" {
 			keyBlock = block
 		}
-		
+
 		remaining = rest
 	}
 
@@ -195,7 +195,7 @@ func (wm *WitnessManager) ObserveTree(logDir string) error {
 		return fmt.Errorf("no draws to observe")
 	}
 
-	treeHash, err := ll.GetTreeHash()
+	treeHash, err := ll.GetTreeHash(treeSize)
 	if err != nil {
 		return fmt.Errorf("failed to get tree hash: %w", err)
 	}
@@ -203,7 +203,7 @@ func (wm *WitnessManager) ObserveTree(logDir string) error {
 	// Create witnessed state
 	state := WitnessedState{
 		TreeSize:  treeSize,
-		TreeHash:  fmt.Sprintf("%x", treeHash[:]),
+		TreeHash:  treeHash,
 		Timestamp: time.Now(),
 		WitnessID: wm.witnessID,
 	}

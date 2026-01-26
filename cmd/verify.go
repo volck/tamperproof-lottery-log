@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"lottery-tlog/tlog"
 
 	"github.com/spf13/cobra"
 )
@@ -25,10 +24,11 @@ func init() {
 }
 
 func runVerify(cmd *cobra.Command, args []string) error {
-	lotteryLog, err := tlog.NewLotteryLog(getDataDir(), logger)
+	lotteryLog, cleanup, err := createLotteryLog()
 	if err != nil {
 		return fmt.Errorf("failed to create lottery log: %w", err)
 	}
+	defer cleanup()
 
 	size, err := lotteryLog.GetTreeSize()
 	if err != nil {
@@ -47,7 +47,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	treeHash, err := lotteryLog.GetTreeHash()
+	treeHash, err := lotteryLog.GetTreeHash(size)
 	if err != nil {
 		return fmt.Errorf("failed to get tree hash: %w", err)
 	}

@@ -3,7 +3,6 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"lottery-tlog/tlog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -61,10 +60,11 @@ func init() {
 }
 
 func runProveConsistency(cmd *cobra.Command, args []string) error {
-	lotteryLog, err := tlog.NewLotteryLog(getDataDir(), logger)
+	lotteryLog, cleanup, err := createLotteryLog()
 	if err != nil {
 		return fmt.Errorf("failed to create lottery log: %w", err)
 	}
+	defer cleanup()
 
 	currentSize, err := lotteryLog.GetTreeSize()
 	if err != nil {
@@ -104,11 +104,11 @@ func runProveConsistency(cmd *cobra.Command, args []string) error {
 
 	// Create proof output
 	proofOutput := struct {
-		OldSize  int64    `json:"old_size"`
-		NewSize  int64    `json:"new_size"`
-		OldHash  string   `json:"old_hash"`
-		NewHash  string   `json:"new_hash"`
-		Proof    []string `json:"proof"`
+		OldSize int64    `json:"old_size"`
+		NewSize int64    `json:"new_size"`
+		OldHash string   `json:"old_hash"`
+		NewHash string   `json:"new_hash"`
+		Proof   []string `json:"proof"`
 	}{
 		OldSize: oldSize,
 		NewSize: newSize,
@@ -158,12 +158,12 @@ func runVerifyConsistency(cmd *cobra.Command, args []string) error {
 	var oldHash, newHash tliblog.Hash
 	oldHashBytes := make([]byte, 32)
 	newHashBytes := make([]byte, 32)
-	
+
 	if _, err := fmt.Sscanf(oldHashHex, "%64x", &oldHashBytes); err != nil {
 		return fmt.Errorf("failed to parse old hash: %w", err)
 	}
 	copy(oldHash[:], oldHashBytes)
-	
+
 	if _, err := fmt.Sscanf(newHashHex, "%64x", &newHashBytes); err != nil {
 		return fmt.Errorf("failed to parse new hash: %w", err)
 	}

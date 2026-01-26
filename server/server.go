@@ -1,39 +1,79 @@
 package server
 
 import (
+	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"lottery-tlog/tlog"
+
+	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/oauth2"
 )
 
 // Server represents the lottery transparency log server
 type Server struct {
-	log        *tlog.LotteryLog
-	logger     *slog.Logger
-	tlsConfig  *tls.Config
-	addr       string
-	heartbeats map[string]time.Time // witnessID -> last heartbeat timestamp
+	log           *tlog.LotteryLog
+	logger        *slog.Logger
+	tlsConfig     *tls.Config
+	addr          string
+	dataDir       string               // Data directory for witness operations
+	heartbeats    map[string]time.Time // witnessID -> last heartbeat timestamp
+	authMethod    string               // "oidc" or "mtls"
+	oidcProvider  *oidc.Provider
+	oidcVerifier  *oidc.IDTokenVerifier
+	oauth2Config  *oauth2.Config
+	oidcConfig    OIDCConfig
+	sessions      map[string]*Session // sessionID -> Session
+	sessionsMutex sync.RWMutex
+}
+
+// Session represents an authenticated user session
+type Session struct {
+	Email        string
+	IsAdmin      bool
+	IsWitness    bool
+	CreatedAt    time.Time
+	ExpiresAt    time.Time
+	LastAccessed time.Time
+	RefreshToken string // OAuth2 refresh token for renewal
 }
 
 // ServerConfig holds server configuration
 type ServerConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	TLS      TLSConfig `mapstructure:"tls"`
+	Host       string     `mapstructure:"host"`
+	Port       int        `mapstructure:"port"`
+	TLS        TLSConfig  `mapstructure:"tls"`
+	AuthMethod string     `mapstructure:"auth_method"`
+	OIDC       OIDCConfig `mapstructure:"oidc"`
 }
 
 type TLSConfig struct {
-	CertFile           string `mapstructure:"cert_file"`
-	KeyFile            string `mapstructure:"key_file"`
-	CAFile             string `mapstructure:"ca_file"`
-	RequireClientCert  bool   `mapstructure:"require_client_cert"`
+	CertFile          string `mapstructure:"cert_file"`
+	KeyFile           string `mapstructure:"key_file"`
+	CAFile            string `mapstructure:"ca_file"`
+	RequireClientCert bool   `mapstructure:"require_client_cert"`
+}
+
+type OIDCConfig struct {
+	Enabled                   bool     `mapstructure:"enabled"`
+	IssuerURL                 string   `mapstructure:"issuer_url"`
+	ClientID                  string   `mapstructure:"client_id"`
+	ClientSecret              string   `mapstructure:"client_secret"`
+	RedirectURL               string   `mapstructure:"redirect_url"`
+	RequireClientCertForToken bool     `mapstructure:"require_client_cert_for_token"`
+	AllowedDomains            []string `mapstructure:"allowed_domains"`
+	AdminEmails               []string `mapstructure:"admin_emails"`
+	WitnessEmails             []string `mapstructure:"witness_emails"`
 }
 
 // NewServer creates a new lottery server
@@ -43,11 +83,53 @@ func NewServer(dataDir string, logger *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("failed to create lottery log: %w", err)
 	}
 
-	return &Server{
+	s := &Server{
 		log:        ll,
 		logger:     logger,
+		dataDir:    dataDir,
 		heartbeats: make(map[string]time.Time),
-	}, nil
+		sessions:   make(map[string]*Session),
+		authMethod: "oidc", // Default to OIDC
+	}
+
+	// Start session cleanup goroutine
+	go s.sessionCleanupLoop()
+
+	return s, nil
+}
+
+// SetupOIDC configures OpenID Connect authentication
+func (s *Server) SetupOIDC(config OIDCConfig) error {
+	if !config.Enabled {
+		s.logger.Info("OIDC authentication disabled")
+		return nil
+	}
+
+	ctx := context.Background()
+	provider, err := oidc.NewProvider(ctx, config.IssuerURL)
+	if err != nil {
+		return fmt.Errorf("failed to create OIDC provider: %w", err)
+	}
+
+	s.oidcProvider = provider
+	s.oidcVerifier = provider.Verifier(&oidc.Config{ClientID: config.ClientID})
+	s.oidcConfig = config
+
+	s.oauth2Config = &oauth2.Config{
+		ClientID:     config.ClientID,
+		ClientSecret: config.ClientSecret,
+		RedirectURL:  config.RedirectURL,
+		Endpoint:     provider.Endpoint(),
+		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
+	}
+
+	s.logger.Info("OIDC authentication configured",
+		"issuer", config.IssuerURL,
+		"client_id", config.ClientID,
+		"admin_count", len(config.AdminEmails),
+		"witness_count", len(config.WitnessEmails))
+
+	return nil
 }
 
 // SetupTLS configures mTLS for witness authentication
@@ -80,47 +162,98 @@ func (s *Server) SetupTLS(config TLSConfig) error {
 // Start starts the HTTPS server with mTLS
 func (s *Server) Start(config ServerConfig) error {
 	s.addr = fmt.Sprintf("%s:%d", config.Host, config.Port)
+	s.authMethod = config.AuthMethod
+	if s.authMethod == "" {
+		s.authMethod = "oidc" // Default to OIDC
+	}
 
-	// Setup TLS
-	if err := s.SetupTLS(config.TLS); err != nil {
-		return err
+	// Setup authentication
+	if s.authMethod == "oidc" {
+		if err := s.SetupOIDC(config.OIDC); err != nil {
+			return fmt.Errorf("failed to setup OIDC: %w", err)
+		}
+	} else if s.authMethod == "mtls" {
+		// Setup TLS for mTLS
+		if err := s.SetupTLS(config.TLS); err != nil {
+			return err
+		}
 	}
 
 	// Setup routes
 	mux := http.NewServeMux()
-	
-	// Public endpoints (no client cert required)
+
+	// Public endpoints (no authentication required)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/api/tree/info", s.handleTreeInfo)
 	mux.HandleFunc("/api/draws", s.handleListDraws)
 	mux.HandleFunc("/api/draws/", s.handleGetDraw)
 	mux.HandleFunc("/api/draws/since/", s.handleDrawsSince)
 	mux.HandleFunc("/api/status", s.handleStatus)
-	
-	// Witness endpoints (client cert required)
-	mux.HandleFunc("/api/witness/observe", s.requireWitnessCert(s.handleWitnessObserve))
-	mux.HandleFunc("/api/witness/observations", s.requireWitnessCert(s.handleWitnessObservations))
+
+	// OIDC authentication endpoints
+	if s.authMethod == "oidc" {
+		mux.HandleFunc("/auth/login", s.handleOIDCLogin)
+		mux.HandleFunc("/auth/callback", s.handleOIDCCallback)
+		mux.HandleFunc("/auth/logout", s.handleOIDCLogout)
+		mux.HandleFunc("/auth/user", s.handleGetUser)
+		mux.HandleFunc("/auth/refresh", s.handleRefreshSession)
+	}
+
+	// Witness endpoints (authentication required)
+	mux.HandleFunc("/api/witness/observe", s.requireAuth("witness", s.handleWitnessObserve))
+	mux.HandleFunc("/api/witness/observations", s.requireAuth("witness", s.handleWitnessObservations))
 	mux.HandleFunc("/api/witness/cosignatures", s.handleGetCosignatures)
 	mux.HandleFunc("/api/witness/heartbeat", s.handleWitnessHeartbeat)
 	
-	// Admin endpoints (client cert required with specific CN)
-	mux.HandleFunc("/api/admin/draw", s.requireAdminCert(s.handleAddDraw))
+	// Witness gossip endpoints (for cross-checking)
+	mux.HandleFunc("/api/witness/gossip", s.handleWitnessGossip)
+	mux.HandleFunc("/api/witness/", s.handleWitnessLatestState)
 
-	server := &http.Server{
-		Addr:      s.addr,
-		Handler:   mux,
-		TLSConfig: s.tlsConfig,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
+	// Admin endpoints (admin authentication required)
+	mux.HandleFunc("/api/admin/draw", s.requireAuth("admin", s.handleAddDraw))
 
-	s.logger.Info("Starting lottery transparency log server", 
-		"address", s.addr, 
-		"mtls", config.TLS.RequireClientCert)
+	var server *http.Server
 
-	if err := server.ListenAndServeTLS("", ""); err != nil {
-		return fmt.Errorf("server failed: %w", err)
+	if s.authMethod == "mtls" && s.tlsConfig != nil {
+		// Use mTLS
+		server = &http.Server{
+			Addr:         s.addr,
+			Handler:      mux,
+			TLSConfig:    s.tlsConfig,
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 15 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+		s.logger.Info("Starting lottery transparency log server",
+			"address", s.addr,
+			"auth_method", "mtls")
+		if err := server.ListenAndServeTLS("", ""); err != nil {
+			return fmt.Errorf("server failed: %w", err)
+		}
+	} else {
+		// Use HTTPS with OIDC
+		server = &http.Server{
+			Addr:         s.addr,
+			Handler:      mux,
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 15 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+		s.logger.Info("Starting lottery transparency log server",
+			"address", s.addr,
+			"auth_method", s.authMethod)
+
+		// Check if TLS certificates exist for HTTPS
+		if config.TLS.CertFile != "" && config.TLS.KeyFile != "" {
+			if err := server.ListenAndServeTLS(config.TLS.CertFile, config.TLS.KeyFile); err != nil {
+				return fmt.Errorf("server failed: %w", err)
+			}
+		} else {
+			s.logger.Warn("Starting HTTP server (no TLS certificates provided)")
+			if err := server.ListenAndServe(); err != nil {
+				return fmt.Errorf("server failed: %w", err)
+			}
+		}
 	}
 
 	return nil
@@ -141,7 +274,7 @@ func (s *Server) requireWitnessCert(next http.HandlerFunc) http.HandlerFunc {
 
 		// Add witness ID to context for handlers
 		r.Header.Set("X-Witness-ID", witnessID)
-		
+
 		next(w, r)
 	}
 }
@@ -173,9 +306,398 @@ func (s *Server) requireAdminCert(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		s.logger.Info("Admin authenticated", "common_name", commonName, "subject", clientCert.Subject.String())
-		
+
 		next(w, r)
 	}
+}
+
+// Unified authentication middleware that supports both OIDC and mTLS
+func (s *Server) requireAuth(role string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.authMethod == "mtls" {
+			// Use mTLS authentication
+			if role == "admin" {
+				s.requireAdminCert(next)(w, r)
+			} else {
+				s.requireWitnessCert(next)(w, r)
+			}
+			return
+		}
+
+		// Use OIDC authentication
+		session := s.getSessionFromRequest(r)
+		if session == nil {
+			http.Error(w, "Authentication required", http.StatusUnauthorized)
+			return
+		}
+
+		// Check if session is expired
+		if time.Now().After(session.ExpiresAt) {
+			s.deleteSession(r)
+			http.Error(w, "Session expired", http.StatusUnauthorized)
+			return
+		}
+
+		// Update last accessed time for idle timeout tracking
+		s.sessionsMutex.Lock()
+		session.LastAccessed = time.Now()
+		s.sessionsMutex.Unlock()
+
+		// Check role-based access
+		if role == "admin" && !session.IsAdmin {
+			s.logger.Warn("Unauthorized admin access attempt", "email", session.Email)
+			http.Error(w, "Admin access required", http.StatusForbidden)
+			return
+		}
+
+		if role == "witness" && !session.IsWitness && !session.IsAdmin {
+			s.logger.Warn("Unauthorized witness access attempt", "email", session.Email)
+			http.Error(w, "Witness access required", http.StatusForbidden)
+			return
+		}
+
+		// Add user info to headers for handlers
+		r.Header.Set("X-User-Email", session.Email)
+		if session.IsAdmin {
+			r.Header.Set("X-User-Role", "admin")
+		} else if session.IsWitness {
+			r.Header.Set("X-User-Role", "witness")
+		}
+
+		next(w, r)
+	}
+}
+
+// Session management helpers
+func (s *Server) getSessionFromRequest(r *http.Request) *Session {
+	cookie, err := r.Cookie("session_id")
+	if err != nil {
+		return nil
+	}
+
+	s.sessionsMutex.RLock()
+	defer s.sessionsMutex.RUnlock()
+	return s.sessions[cookie.Value]
+}
+
+func (s *Server) createSession(email string, isAdmin, isWitness bool, refreshToken string) string {
+	sessionID := s.generateSessionID()
+	now := time.Now()
+	session := &Session{
+		Email:        email,
+		IsAdmin:      isAdmin,
+		IsWitness:    isWitness,
+		CreatedAt:    now,
+		ExpiresAt:    now.Add(24 * time.Hour),
+		LastAccessed: now,
+		RefreshToken: refreshToken,
+	}
+
+	s.sessionsMutex.Lock()
+	s.sessions[sessionID] = session
+	s.sessionsMutex.Unlock()
+
+	s.logger.Info("Session created",
+		"email", email,
+		"session_id", sessionID[:8]+"...",
+		"expires_at", session.ExpiresAt.Format(time.RFC3339))
+
+	return sessionID
+}
+
+func (s *Server) deleteSession(r *http.Request) {
+	cookie, err := r.Cookie("session_id")
+	if err != nil {
+		return
+	}
+
+	s.sessionsMutex.Lock()
+	delete(s.sessions, cookie.Value)
+	s.sessionsMutex.Unlock()
+
+	s.logger.Info("Session deleted", "session_id", cookie.Value[:8]+"...")
+}
+
+// sessionCleanupLoop periodically removes expired sessions
+func (s *Server) sessionCleanupLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.cleanupExpiredSessions()
+	}
+}
+
+// cleanupExpiredSessions removes expired and idle sessions
+func (s *Server) cleanupExpiredSessions() {
+	now := time.Now()
+	idleTimeout := 30 * time.Minute
+
+	s.sessionsMutex.Lock()
+	defer s.sessionsMutex.Unlock()
+
+	initialCount := len(s.sessions)
+	removed := 0
+
+	for sessionID, session := range s.sessions {
+		// Remove if expired
+		if now.After(session.ExpiresAt) {
+			delete(s.sessions, sessionID)
+			removed++
+			s.logger.Debug("Removed expired session",
+				"session_id", sessionID[:8]+"...",
+				"email", session.Email,
+				"expired_at", session.ExpiresAt.Format(time.RFC3339))
+			continue
+		}
+
+		// Remove if idle too long
+		if now.Sub(session.LastAccessed) > idleTimeout {
+			delete(s.sessions, sessionID)
+			removed++
+			s.logger.Debug("Removed idle session",
+				"session_id", sessionID[:8]+"...",
+				"email", session.Email,
+				"last_accessed", session.LastAccessed.Format(time.RFC3339))
+		}
+	}
+
+	if removed > 0 {
+		s.logger.Info("Session cleanup completed",
+			"initial_count", initialCount,
+			"removed", removed,
+			"remaining", len(s.sessions))
+	}
+}
+
+func (s *Server) generateSessionID() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return base64.URLEncoding.EncodeToString(b)
+}
+
+// OIDC Authentication Handlers
+func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
+	state := s.generateSessionID()
+
+	// Store state in a temporary cookie for validation
+	http.SetCookie(w, &http.Cookie{
+		Name:     "oauth_state",
+		Value:    state,
+		MaxAge:   300, // 5 minutes
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	url := s.oauth2Config.AuthCodeURL(state)
+	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+}
+
+func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
+	// Verify state
+	stateCookie, err := r.Cookie("oauth_state")
+	if err != nil {
+		http.Error(w, "State cookie not found", http.StatusBadRequest)
+		return
+	}
+
+	if r.URL.Query().Get("state") != stateCookie.Value {
+		http.Error(w, "State mismatch", http.StatusBadRequest)
+		return
+	}
+
+	// Exchange code for token
+	oauth2Token, err := s.oauth2Config.Exchange(r.Context(), r.URL.Query().Get("code"))
+	if err != nil {
+		s.logger.Error("Failed to exchange token", "error", err)
+		http.Error(w, "Failed to exchange token", http.StatusInternalServerError)
+		return
+	}
+
+	// Extract ID Token
+	rawIDToken, ok := oauth2Token.Extra("id_token").(string)
+	if !ok {
+		http.Error(w, "No id_token in token response", http.StatusInternalServerError)
+		return
+	}
+
+	// Verify ID Token
+	idToken, err := s.oidcVerifier.Verify(r.Context(), rawIDToken)
+	if err != nil {
+		s.logger.Error("Failed to verify ID token", "error", err)
+		http.Error(w, "Failed to verify token", http.StatusInternalServerError)
+		return
+	}
+
+	// Extract claims
+	var claims struct {
+		Email         string `json:"email"`
+		EmailVerified bool   `json:"email_verified"`
+	}
+	if err := idToken.Claims(&claims); err != nil {
+		http.Error(w, "Failed to parse claims", http.StatusInternalServerError)
+		return
+	}
+
+	if !claims.EmailVerified {
+		http.Error(w, "Email not verified", http.StatusForbidden)
+		return
+	}
+
+	// Check domain restrictions
+	if len(s.oidcConfig.AllowedDomains) > 0 {
+		allowed := false
+		for _, domain := range s.oidcConfig.AllowedDomains {
+			if strings.HasSuffix(claims.Email, "@"+domain) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			s.logger.Warn("Domain not allowed", "email", claims.Email)
+			http.Error(w, "Domain not allowed", http.StatusForbidden)
+			return
+		}
+	}
+
+	// Determine roles
+	isAdmin := false
+	for _, adminEmail := range s.oidcConfig.AdminEmails {
+		if claims.Email == adminEmail {
+			isAdmin = true
+			break
+		}
+	}
+
+	isWitness := isAdmin // Admins are also witnesses
+	if !isWitness {
+		for _, witnessEmail := range s.oidcConfig.WitnessEmails {
+			if claims.Email == witnessEmail {
+				isWitness = true
+				break
+			}
+		}
+	}
+
+	// Create session with refresh token
+	refreshToken := ""
+	if oauth2Token.RefreshToken != "" {
+		refreshToken = oauth2Token.RefreshToken
+	}
+	sessionID := s.createSession(claims.Email, isAdmin, isWitness, refreshToken)
+
+	// Set session cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session_id",
+		Value:    sessionID,
+		MaxAge:   86400, // 24 hours
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		Path:     "/",
+	})
+
+	// Clear state cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:   "oauth_state",
+		Value:  "",
+		MaxAge: -1,
+	})
+
+	s.logger.Info("User authenticated",
+		"email", claims.Email,
+		"is_admin", isAdmin,
+		"is_witness", isWitness)
+
+	// Redirect to application
+	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+}
+
+func (s *Server) handleOIDCLogout(w http.ResponseWriter, r *http.Request) {
+	s.deleteSession(r)
+
+	http.SetCookie(w, &http.Cookie{
+		Name:   "session_id",
+		Value:  "",
+		MaxAge: -1,
+		Path:   "/",
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "logged out"})
+}
+
+func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request) {
+	session := s.getSessionFromRequest(r)
+	if session == nil {
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"email":         session.Email,
+		"is_admin":      session.IsAdmin,
+		"is_witness":    session.IsWitness,
+		"expires_at":    session.ExpiresAt,
+		"last_accessed": session.LastAccessed,
+		"created_at":    session.CreatedAt,
+	})
+}
+
+func (s *Server) handleRefreshSession(w http.ResponseWriter, r *http.Request) {
+	session := s.getSessionFromRequest(r)
+	if session == nil {
+		http.Error(w, "Not authenticated", http.StatusUnauthorized)
+		return
+	}
+
+	// If session has a refresh token, use it to get a new access token
+	if session.RefreshToken != "" && s.oauth2Config != nil {
+		// Create token source with refresh token
+		token := &oauth2.Token{
+			RefreshToken: session.RefreshToken,
+		}
+
+		tokenSource := s.oauth2Config.TokenSource(r.Context(), token)
+		newToken, err := tokenSource.Token()
+
+		if err != nil {
+			s.logger.Warn("Failed to refresh OAuth2 token", "error", err, "email", session.Email)
+			http.Error(w, "Failed to refresh token", http.StatusUnauthorized)
+			return
+		}
+
+		// Update session with new refresh token if provided
+		s.sessionsMutex.Lock()
+		if newToken.RefreshToken != "" {
+			session.RefreshToken = newToken.RefreshToken
+		}
+		session.ExpiresAt = time.Now().Add(24 * time.Hour)
+		session.LastAccessed = time.Now()
+		s.sessionsMutex.Unlock()
+
+		s.logger.Info("Session refreshed",
+			"email", session.Email,
+			"new_expires_at", session.ExpiresAt.Format(time.RFC3339))
+	} else {
+		// No refresh token - just extend the session
+		s.sessionsMutex.Lock()
+		session.ExpiresAt = time.Now().Add(24 * time.Hour)
+		session.LastAccessed = time.Now()
+		s.sessionsMutex.Unlock()
+
+		s.logger.Info("Session extended",
+			"email", session.Email,
+			"new_expires_at", session.ExpiresAt.Format(time.RFC3339))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     "refreshed",
+		"expires_at": session.ExpiresAt,
+	})
 }
 
 // Health check endpoint
@@ -194,12 +716,12 @@ func (s *Server) handleTreeInfo(w http.ResponseWriter, r *http.Request) {
 
 	var treeHash string
 	if treeSize > 0 {
-		hash, err := s.log.GetTreeHash()
+		hash, err := s.log.GetTreeHash(treeSize)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		treeHash = fmt.Sprintf("%x", hash[:])
+		treeHash = hash
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -279,10 +801,10 @@ func (s *Server) handleDrawsSince(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"since_tree_size": sinceSize,
+		"since_tree_size":   sinceSize,
 		"current_tree_size": currentSize,
-		"new_draws_count": len(newDraws),
-		"draws": newDraws,
+		"new_draws_count":   len(newDraws),
+		"draws":             newDraws,
 	})
 }
 
@@ -294,7 +816,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	treeHash, err := s.log.GetTreeHash()
+	treeHash, err := s.log.GetTreeHash(treeSize)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -305,12 +827,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	lastWitnessedSize := int64(0)
 	witnessedTreeSizes := make(map[int64]int) // tree_size -> witness count
 	type WitnessInfo struct {
-		WitnessID        string    `json:"witness_id"`
-		LastTreeSize     int64     `json:"last_tree_size"`
-		LastSignatureAt  time.Time `json:"last_signature_at"`
+		WitnessID       string    `json:"witness_id"`
+		LastTreeSize    int64     `json:"last_tree_size"`
+		LastSignatureAt time.Time `json:"last_signature_at"`
 	}
 	witnessDetails := make(map[string]*WitnessInfo) // witness_id -> info
-	
+
 	// Check current tree size and go backwards
 	for checkSize := treeSize; checkSize > 0 && checkSize > treeSize-10; checkSize-- {
 		cosigs, err := s.log.GetWitnessCosignatures(checkSize)
@@ -350,9 +872,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	// Convert witness details to slice for JSON response and add heartbeat info
 	type WitnessStatus struct {
 		*WitnessInfo
-		Online           bool      `json:"online"`
-		LastHeartbeat    time.Time `json:"last_heartbeat,omitempty"`
-		SecondsSinceHB   int       `json:"seconds_since_heartbeat,omitempty"`
+		Online         bool      `json:"online"`
+		LastHeartbeat  time.Time `json:"last_heartbeat,omitempty"`
+		SecondsSinceHB int       `json:"seconds_since_heartbeat,omitempty"`
 	}
 
 	witnessStatuses := make([]*WitnessStatus, 0, len(witnessDetails))
@@ -371,14 +893,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":                status,
-		"tree_size":             treeSize,
-		"tree_hash":             fmt.Sprintf("%x", treeHash),
-		"last_witnessed_size":   lastWitnessedSize,
-		"unconfirmed_count":     unconfirmedCount,
-		"active_witnesses":      len(witnessDetails),
-		"witnesses":             witnessStatuses,
-		"witnessed_tree_sizes":  witnessedTreeSizes,
+		"status":               status,
+		"tree_size":            treeSize,
+		"tree_hash":            fmt.Sprintf("%x", treeHash),
+		"last_witnessed_size":  lastWitnessedSize,
+		"unconfirmed_count":    unconfirmedCount,
+		"active_witnesses":     len(witnessDetails),
+		"witnesses":            witnessStatuses,
+		"witnessed_tree_sizes": witnessedTreeSizes,
 	})
 }
 
@@ -390,7 +912,7 @@ func (s *Server) handleWitnessObserve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	witnessID := r.Header.Get("X-Witness-ID")
-	
+
 	treeSize, err := s.log.GetTreeSize()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -402,7 +924,7 @@ func (s *Server) handleWitnessObserve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	treeHash, err := s.log.GetTreeHash()
+	treeHash, err := s.log.GetTreeHash(treeSize)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -412,7 +934,7 @@ func (s *Server) handleWitnessObserve(w http.ResponseWriter, r *http.Request) {
 	var requestBody struct {
 		Signature string `json:"signature"`
 	}
-	
+
 	if r.Body != nil {
 		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
 			s.logger.Warn("Failed to decode request body", "error", err)
@@ -444,11 +966,11 @@ func (s *Server) handleWitnessObserve(w http.ResponseWriter, r *http.Request) {
 	cosignatures, _ := s.log.GetWitnessCosignatures(treeSize)
 
 	observation := map[string]interface{}{
-		"witness_id":      witnessID,
-		"tree_size":       treeSize,
-		"tree_hash":       fmt.Sprintf("%x", treeHash[:]),
-		"timestamp":       time.Now().Format(time.RFC3339),
-		"witness_count":   len(cosignatures),
+		"witness_id":    witnessID,
+		"tree_size":     treeSize,
+		"tree_hash":     fmt.Sprintf("%x", treeHash[:]),
+		"timestamp":     time.Now().Format(time.RFC3339),
+		"witness_count": len(cosignatures),
 	}
 
 	s.logger.Info("Tree state observed", "witness_id", witnessID, "tree_size", treeSize, "cosignatures", len(cosignatures))
@@ -460,10 +982,10 @@ func (s *Server) handleWitnessObserve(w http.ResponseWriter, r *http.Request) {
 // Get witness observations (mTLS authenticated)
 func (s *Server) handleWitnessObservations(w http.ResponseWriter, r *http.Request) {
 	witnessID := r.Header.Get("X-Witness-ID")
-	
+
 	// TODO: Load and return witness's observation history
 	// For now, return placeholder
-	
+
 	observations := []map[string]interface{}{
 		{
 			"witness_id": witnessID,
@@ -555,13 +1077,127 @@ func (s *Server) handleAddDraw(w http.ResponseWriter, r *http.Request) {
 	}
 
 	treeSize, _ := s.log.GetTreeSize()
-	s.logger.Info("Draw added by admin", "draw_id", draw.DrawID, "new_tree_size", treeSize)
+	s.logger.Info("Draw added by admin", "seqno", draw.SeqNo, "code", draw.Message.Code, "new_tree_size", treeSize)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":   true,
-		"draw_id":   draw.DrawID,
+		"seqno":     draw.SeqNo,
+		"code":      draw.Message.Code,
 		"tree_size": treeSize,
 	})
+}
+
+// handleWitnessGossip receives witnessed states from other witnesses for cross-checking
+func (s *Server) handleWitnessGossip(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var receivedState tlog.WitnessedState
+	if err := json.NewDecoder(r.Body).Decode(&receivedState); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Get current tree state
+	treeSize, err := s.log.GetTreeSize()
+	if err != nil {
+		http.Error(w, "Failed to get tree size", http.StatusInternalServerError)
+		return
+	}
+
+	treeHash, err := s.log.GetTreeHash(treeSize)
+	if err != nil {
+		http.Error(w, "Failed to get tree hash", http.StatusInternalServerError)
+		return
+	}
+
+	// Compare with received state
+	consistent := true
+	details := ""
+
+	if receivedState.TreeSize == treeSize {
+		if receivedState.TreeHash != treeHash {
+			consistent = false
+			details = fmt.Sprintf("FORK DETECTED! Same tree size (%d) but different hashes: local=%s remote=%s",
+				treeSize, treeHash[:16], receivedState.TreeHash[:16])
+			s.logger.Error("Fork detected in witness gossip",
+				"remote_witness", receivedState.WitnessID,
+				"tree_size", treeSize,
+				"local_hash", treeHash,
+				"remote_hash", receivedState.TreeHash)
+		} else {
+			details = "Tree size and hash match exactly"
+		}
+	} else if receivedState.TreeSize > treeSize {
+		details = fmt.Sprintf("Remote witness is ahead (size %d vs %d)", receivedState.TreeSize, treeSize)
+	} else {
+		details = fmt.Sprintf("Local is ahead (size %d vs %d)", treeSize, receivedState.TreeSize)
+	}
+
+	s.logger.Info("Received witness gossip",
+		"remote_witness", receivedState.WitnessID,
+		"remote_tree_size", receivedState.TreeSize,
+		"local_tree_size", treeSize,
+		"consistent", consistent,
+		"details", details)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":    true,
+		"consistent": consistent,
+		"details":    details,
+		"local_tree_size": treeSize,
+		"local_tree_hash": treeHash,
+	})
+}
+
+// handleWitnessLatestState returns a witness's latest observed state
+func (s *Server) handleWitnessLatestState(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract witness ID from path: /api/witness/{witnessID}/latest
+	path := r.URL.Path
+	if len(path) < len("/api/witness/") {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	// Parse path to extract witness ID
+	pathParts := strings.Split(strings.TrimPrefix(path, "/api/witness/"), "/")
+	if len(pathParts) < 2 || pathParts[1] != "latest" {
+		http.Error(w, "Invalid path format. Use /api/witness/{witnessID}/latest", http.StatusBadRequest)
+		return
+	}
+
+	witnessID := pathParts[0]
+
+	// Load witness data
+	wm, err := tlog.NewWitnessManager(s.dataDir, witnessID)
+	if err != nil {
+		http.Error(w, "Witness not found", http.StatusNotFound)
+		return
+	}
+
+	states, err := wm.ListWitnessedStates()
+	if err != nil {
+		http.Error(w, "Failed to get witnessed states", http.StatusInternalServerError)
+		return
+	}
+
+	if len(states) == 0 {
+		http.Error(w, "No witnessed states found for this witness", http.StatusNotFound)
+		return
+	}
+
+	latestState := states[len(states)-1]
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(latestState)
 }
