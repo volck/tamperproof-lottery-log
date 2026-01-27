@@ -29,7 +29,7 @@ docker-compose logs -f
 
 # 5. Test with witness observer (from host machine)
 cd ..
-./lottery-tlog witness-observe \
+./lottery-tlog witness observe \
   --witness-id witness1 \
   --server https://localhost:8080 \
   --keycloak-url https://localhost:8443/realms/lottery/protocol/openid-connect/token \
@@ -216,12 +216,12 @@ This runs 6 test scenarios:
 ```bash
 # Start the lottery server first (in separate terminal)
 cd ..
-./lottery-tlog server-init
-./lottery-tlog server
+./lottery-tlog server init
+./lottery-tlog server start
 
 # In another terminal, test witness observer with Keycloak
 cd test-mtls
-../lottery-tlog witness-observe \
+../lottery-tlog witness observe \
   --witness-id witness1 \
   --server https://localhost:8080 \
   --keycloak-url https://localhost:8443/realms/lottery/protocol/openid-connect/token \
@@ -251,7 +251,7 @@ Watch token automatic refresh in action:
 export LOG_LEVEL=debug
 
 # Start watch mode
-../lottery-tlog witness-observe \
+../lottery-tlog witness observe \
   --witness-id witness1 \
   --server https://localhost:8080 \
   --keycloak-url https://localhost:8443/realms/lottery/protocol/openid-connect/token \

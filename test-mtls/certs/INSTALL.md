@@ -10,7 +10,7 @@ The certificates are automatically mounted via docker-compose.yml:
 
 ```bash
 # Use client certificate with witness observer
-../lottery-tlog witness-observe \
+../lottery-tlog witness observe \
   --witness-id witness1 \
   --server https://localhost:8443 \
   --keycloak-url https://localhost:8443/realms/lottery/protocol/openid-connect/token \

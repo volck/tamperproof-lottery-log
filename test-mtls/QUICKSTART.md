@@ -65,7 +65,7 @@ From the main directory:
 cd ..
 
 # Single observation
-./lottery-tlog witness-observe \
+./lottery-tlog witness observe \
   --witness-id witness1 \
   --server https://localhost:8080 \
   --keycloak-url https://localhost:8443/realms/lottery/protocol/openid-connect/token \
@@ -74,7 +74,7 @@ cd ..
   --password password123
 
 # Watch mode (continuous monitoring with automatic token refresh)
-./lottery-tlog witness-observe \
+./lottery-tlog witness observe \
   --witness-id witness1 \
   --server https://localhost:8080 \
   --keycloak-url https://localhost:8443/realms/lottery/protocol/openid-connect/token \
@@ -222,7 +222,7 @@ Check that:
 Enable debug logging:
 ```bash
 cd ..
-LOG_LEVEL=debug ./lottery-tlog witness-observe --watch ...
+LOG_LEVEL=debug ./lottery-tlog witness observe --watch ...
 ```
 
 ## Test Credentials

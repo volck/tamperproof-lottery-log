@@ -97,7 +97,7 @@ services:
       retries: 10
       start_period: 10s
       
-    command: ["./lottery-tlog", "server"]
+    command: ["./lottery-tlog", "server", "start"]
 
   # Witness 1
   witness1:
@@ -125,7 +125,7 @@ services:
         condition: service_healthy
         
     command: [
-      "./lottery-tlog", "witness-observe",
+      "./lottery-tlog", "witness", "observe",
       "--witness-id", "witness1",
       "--server", "https://lottery-tlog:8443",
       "--keycloak-url", "https://keycloak:8443/realms/lottery/protocol/openid-connect/token",
@@ -165,7 +165,7 @@ services:
         condition: service_healthy
         
     command: [
-      "./lottery-tlog", "witness-observe",
+      "./lottery-tlog", "witness", "observe",
       "--witness-id", "witness2",
       "--server", "https://lottery-tlog:8443",
       "--keycloak-url", "https://keycloak:8443/realms/lottery/protocol/openid-connect/token",

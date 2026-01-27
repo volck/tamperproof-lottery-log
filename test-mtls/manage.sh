@@ -186,8 +186,8 @@ function init_witness() {
         exit 1
     fi
     
-    # Run witness-init in the container
-    docker-compose exec lottery-tlog ./lottery-tlog witness-init \
+    # Run witness init in the container
+    docker-compose exec lottery-tlog ./lottery-tlog witness init \
         --witness-id "$witness_id" \
         --name "Test Witness $witness_id"
     
