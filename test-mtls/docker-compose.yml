@@ -125,16 +125,8 @@ services:
         condition: service_healthy
         
     command: [
-      "./lottery-tlog", "witness", "observe",
-      "--witness-id", "witness1",
-      "--server", "https://lottery-tlog:8443",
-      "--keycloak-url", "https://keycloak:8443/realms/lottery/protocol/openid-connect/token",
-      "--client-id", "lottery-witness",
-      "--username", "witness1@example.com",
-      "--password", "password123",
-      "--ca-cert", "/app/certs/ca-cert.pem",
-      "--watch",
-      "--interval", "10s"
+      "/bin/sh", "-c",
+      "./lottery-tlog witness init --witness-id witness1 --name 'Witness 1' --data-dir /app/.lottery-data || true && ./lottery-tlog witness observe --witness-id witness1 --server https://lottery-tlog:8443 --keycloak-url https://keycloak:8443/realms/lottery/protocol/openid-connect/token --client-id lottery-witness --username witness1@example.com --password password123 --ca-cert /app/certs/ca-cert.pem --watch --interval 10s --data-dir /app/.lottery-data"
     ]
     
     restart: unless-stopped
@@ -165,16 +157,8 @@ services:
         condition: service_healthy
         
     command: [
-      "./lottery-tlog", "witness", "observe",
-      "--witness-id", "witness2",
-      "--server", "https://lottery-tlog:8443",
-      "--keycloak-url", "https://keycloak:8443/realms/lottery/protocol/openid-connect/token",
-      "--client-id", "lottery-witness",
-      "--username", "witness2@example.com",
-      "--password", "password123",
-      "--ca-cert", "/app/certs/ca-cert.pem",
-      "--watch",
-      "--interval", "10s"
+      "/bin/sh", "-c",
+      "./lottery-tlog witness init --witness-id witness2 --name 'Witness 2' --data-dir /app/.lottery-data || true && ./lottery-tlog witness observe --witness-id witness2 --server https://lottery-tlog:8443 --keycloak-url https://keycloak:8443/realms/lottery/protocol/openid-connect/token --client-id lottery-witness --username witness2@example.com --password password123 --ca-cert /app/certs/ca-cert.pem --watch --interval 10s --data-dir /app/.lottery-data"
     ]
     
     restart: unless-stopped
