@@ -217,7 +217,7 @@ var witnessObserveCmd = &cobra.Command{
 			return fmt.Errorf("witness-id is required")
 		}
 
-		dataDir := viper.GetString("log_directory")
+		dataDir := getDataDir()
 
 		// Check if server flag is provided for remote observation
 		serverURL, _ := cmd.Flags().GetString("server")
