@@ -9,30 +9,30 @@ import (
 type QuorumConfig struct {
 	// MinWitnesses is the minimum number of witnesses required
 	MinWitnesses int
-	
+
 	// QuorumThreshold is the fraction of witnesses that must agree (0.0-1.0)
 	// For example, 0.67 means 2/3 majority
 	QuorumThreshold float64
-	
+
 	// MaxWaitTime is how long to wait for quorum before timing out
 	MaxWaitTime time.Duration
-	
+
 	// KnownWitnesses is the list of all known witness IDs
 	KnownWitnesses []string
 }
 
 // QuorumResult represents the result of a quorum check
 type QuorumResult struct {
-	TreeSize           int64                  `json:"tree_size"`
-	TreeHash           string                 `json:"tree_hash"`
-	QuorumAchieved     bool                   `json:"quorum_achieved"`
-	RequiredSignatures int                    `json:"required_signatures"`
-	ReceivedSignatures int                    `json:"received_signatures"`
-	SigningWitnesses   []string               `json:"signing_witnesses"`
-	MissingWitnesses   []string               `json:"missing_witnesses"`
-	Timestamp          time.Time              `json:"timestamp"`
-	Details            string                 `json:"details,omitempty"`
-	Cosignatures       []WitnessCosignature   `json:"cosignatures"`
+	TreeSize           int64                `json:"tree_size"`
+	TreeHash           string               `json:"tree_hash"`
+	QuorumAchieved     bool                 `json:"quorum_achieved"`
+	RequiredSignatures int                  `json:"required_signatures"`
+	ReceivedSignatures int                  `json:"received_signatures"`
+	SigningWitnesses   []string             `json:"signing_witnesses"`
+	MissingWitnesses   []string             `json:"missing_witnesses"`
+	Timestamp          time.Time            `json:"timestamp"`
+	Details            string               `json:"details,omitempty"`
+	Cosignatures       []WitnessCosignature `json:"cosignatures"`
 }
 
 // CheckQuorum verifies if enough witnesses have signed a tree state
@@ -95,7 +95,7 @@ func CheckQuorum(cosignatures []WitnessCosignature, config QuorumConfig, treeSiz
 func WaitForQuorum(backend StorageBackend, config QuorumConfig, treeSize int64, treeHash string) (*QuorumResult, error) {
 	startTime := time.Now()
 	pollInterval := 1 * time.Second
-	
+
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
@@ -134,7 +134,7 @@ func WaitForQuorum(backend StorageBackend, config QuorumConfig, treeSize int64, 
 // VerifyQuorumSignatures validates all signatures in a quorum result
 func VerifyQuorumSignatures(result *QuorumResult, publicKeys map[string]string) error {
 	verifiedCount := 0
-	
+
 	for _, cosig := range result.Cosignatures {
 		if cosig.TreeSize != result.TreeSize || cosig.TreeHash != result.TreeHash {
 			continue // Skip signatures for different states
@@ -184,13 +184,13 @@ type QuorumPolicy int
 const (
 	// QuorumNever never requires quorum (independent witness operation)
 	QuorumNever QuorumPolicy = iota
-	
+
 	// QuorumForPublish requires quorum before publishing tree hash
 	QuorumForPublish
-	
+
 	// QuorumForConfirmation requires quorum to confirm draws
 	QuorumForConfirmation
-	
+
 	// QuorumStrict requires quorum for all operations
 	QuorumStrict
 )
@@ -200,16 +200,16 @@ func QuorumDecision(policy QuorumPolicy, result *QuorumResult) (bool, string) {
 	switch policy {
 	case QuorumNever:
 		return true, "Quorum not required by policy"
-		
+
 	case QuorumForPublish, QuorumForConfirmation, QuorumStrict:
 		if result.QuorumAchieved {
 			return true, fmt.Sprintf("Quorum achieved: %d/%d witnesses", result.ReceivedSignatures, len(result.SigningWitnesses)+len(result.MissingWitnesses))
 		}
-		return false, fmt.Sprintf("Quorum not achieved: %d/%d witnesses (need %d)", 
-			result.ReceivedSignatures, 
+		return false, fmt.Sprintf("Quorum not achieved: %d/%d witnesses (need %d)",
+			result.ReceivedSignatures,
 			len(result.SigningWitnesses)+len(result.MissingWitnesses),
 			result.RequiredSignatures)
 	}
-	
+
 	return false, "Unknown quorum policy"
 }

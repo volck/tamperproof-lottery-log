@@ -35,7 +35,7 @@ In production, use certificates from a trusted CA.`,
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		certDir := "certs"
-		
+
 		// Create certs directory if it doesn't exist
 		if err := os.MkdirAll(certDir, 0755); err != nil {
 			return fmt.Errorf("failed to create certs directory: %w", err)

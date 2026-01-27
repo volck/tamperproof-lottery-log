@@ -17,7 +17,7 @@ func TestWitnessWatcher(t *testing.T) {
 	tempDir := t.TempDir()
 	watchDir := filepath.Join(tempDir, "watch")
 	witnessDir := filepath.Join(tempDir, "witness")
-	
+
 	if err := os.MkdirAll(watchDir, 0755); err != nil {
 		t.Fatalf("Failed to create watch directory: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestWitnessWatcher(t *testing.T) {
 
 	// Create a valid log entry
 	entry := `{ "timestamp": "2024-06-24T07:41:59.049+0200", "seqno": 1, "ip": "172.21.0.69", "severity": "harmless", "message": { "code": 303, "text": "Test entry" }, "mac": "0000000000000000000000000000000000000000000000000000000000000000" }`
-	
+
 	// Compute valid MAC
 	mac := computeValidMAC(entry, testKey)
 	entry = strings.Replace(entry, "0000000000000000000000000000000000000000000000000000000000000000", mac, 1)
@@ -109,7 +109,7 @@ func TestWitnessWatcherInvalidMAC(t *testing.T) {
 	tempDir := t.TempDir()
 	watchDir := filepath.Join(tempDir, "watch")
 	witnessDir := filepath.Join(tempDir, "witness")
-	
+
 	if err := os.MkdirAll(watchDir, 0755); err != nil {
 		t.Fatalf("Failed to create watch directory: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestWitnessWatcherConsistencyCheck(t *testing.T) {
 	tempDir := t.TempDir()
 	watchDir := filepath.Join(tempDir, "watch")
 	witnessDir := filepath.Join(tempDir, "witness")
-	
+
 	if err := os.MkdirAll(watchDir, 0755); err != nil {
 		t.Fatalf("Failed to create watch directory: %v", err)
 	}
@@ -290,7 +290,7 @@ func (m *MockLogBackend) VerifyIntegrity() error {
 // Helper function to compute valid MAC
 func computeValidMAC(entry string, key string) string {
 	const zeroMAC = "0000000000000000000000000000000000000000000000000000000000000000"
-	
+
 	keyBytes, _ := hex.DecodeString(key)
 	h := hmac.New(sha256.New, keyBytes)
 	h.Write([]byte(entry))

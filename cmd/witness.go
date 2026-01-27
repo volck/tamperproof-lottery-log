@@ -26,7 +26,7 @@ Available subcommands:
 
 func init() {
 	rootCmd.AddCommand(witnessCmd)
-	
+
 	// Add all witness subcommands
 	witnessCmd.AddCommand(witnessInitCmd)
 	witnessCmd.AddCommand(witnessObserveCmd)

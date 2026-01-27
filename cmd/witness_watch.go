@@ -29,10 +29,10 @@ acknowledge them automatically.`,
 }
 
 var (
-	watchDir       string
-	keyFile        string
-	witnessID      string
-	serverURL      string
+	watchDir        string
+	keyFile         string
+	witnessID       string
+	serverURL       string
 	useLocalBackend bool
 )
 

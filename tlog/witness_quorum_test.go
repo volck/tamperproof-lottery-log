@@ -7,15 +7,15 @@ import (
 
 func TestCheckQuorum(t *testing.T) {
 	tests := []struct {
-		name              string
-		cosignatures      []WitnessCosignature
-		config            QuorumConfig
-		treeSize          int64
-		treeHash          string
-		wantQuorum        bool
-		wantSigning       int
-		wantMissing       int
-		wantRequiredSigs  int
+		name             string
+		cosignatures     []WitnessCosignature
+		config           QuorumConfig
+		treeSize         int64
+		treeHash         string
+		wantQuorum       bool
+		wantSigning      int
+		wantMissing      int
+		wantRequiredSigs int
 	}{
 		{
 			name: "2/3 quorum achieved",

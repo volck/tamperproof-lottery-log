@@ -24,7 +24,7 @@ Available subcommands:
 
 func init() {
 	rootCmd.AddCommand(proofCmd)
-	
+
 	// Add proof subcommands
 	proofCmd.AddCommand(proveInclusionCmd)
 	proofCmd.AddCommand(verifyInclusionCmd)

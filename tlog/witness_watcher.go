@@ -136,7 +136,7 @@ func (ww *WitnessWatcher) processEvents() {
 				}
 
 				ww.logger.Info("Detected file change", "file", event.Name, "operation", event.Op)
-				
+
 				// Process the file asynchronously to avoid blocking
 				go ww.validateAndAck(event.Name)
 			}
@@ -187,7 +187,7 @@ func (ww *WitnessWatcher) validateAndAck(filePath string) {
 	// Step 4: Compare local validated data with server state
 	// In a full implementation, we would verify inclusion proofs here
 	// For now, we trust that if HMAC validates, we can observe the tree
-	
+
 	// Step 5: Create witnessed state and sign it
 	witnessedState, err := ww.witnessManager.ObserveRemoteTree(serverTreeSize, serverTreeHash)
 	if err != nil {

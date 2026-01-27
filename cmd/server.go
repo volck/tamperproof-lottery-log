@@ -17,7 +17,7 @@ var serverStartCmd = &cobra.Command{
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dataDir := viper.GetString("log_directory")
-		
+
 		// Load server config
 		var serverConfig server.ServerConfig
 		if err := viper.UnmarshalKey("server", &serverConfig); err != nil {
