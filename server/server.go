@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -1068,10 +1069,8 @@ func (s *Server) handleWitnessObserve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Body != nil {
-		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil && err != io.EOF {
 			s.logger.Warn("Failed to decode request body", "error", err)
-		} else {
-			s.logger.Info("Decoded request body", "has_signature", requestBody.Signature != "")
 		}
 	}
 

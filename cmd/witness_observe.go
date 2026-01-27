@@ -544,7 +544,7 @@ func watchServer(witnessID, serverURL, dataDir string, interval time.Duration, p
 			sendHeartbeat()
 
 			// Get current tree state
-			req, err := http.NewRequest("POST", serverURL+"/api/witness/observe", bytes.NewReader([]byte{}))
+			req, err := http.NewRequest("POST", serverURL+"/api/witness/observe", bytes.NewReader([]byte("{}")))
 			if err != nil {
 				slog.Error("Failed to create request", "error", err)
 				continue
