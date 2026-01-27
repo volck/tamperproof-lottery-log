@@ -288,6 +288,7 @@ func observeFromServer(witnessID, serverURL, dataDir string) error {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
+	req.Header.Set("X-Witness-ID", witnessID)
 	// Add authentication header if using JWT
 	if authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+authToken)
@@ -375,6 +376,7 @@ func observeFromServer(witnessID, serverURL, dataDir string) error {
 		return fmt.Errorf("failed to create signature request: %w", err)
 	}
 
+	req2.Header.Set("X-Witness-ID", witnessID)
 	// Add authentication header if using JWT
 	if authToken != "" {
 		req2.Header.Set("Authorization", "Bearer "+authToken)
@@ -549,12 +551,7 @@ func watchServer(witnessID, serverURL, dataDir string, interval time.Duration, p
 				slog.Error("Failed to create request", "error", err)
 				continue
 			}
-			token := getCurrentToken()
-			if token != "" {
-				req.Header.Set("Authorization", "Bearer "+token)
-			}
-			req.Header.Set("Content-Type", "application/json")
-
+		req.Header.Set("X-Witness-ID", witnessID)
 			resp, err := client.Do(req)
 			if err != nil {
 				slog.Error("Failed to connect to server", "error", err)

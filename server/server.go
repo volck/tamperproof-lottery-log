@@ -31,7 +31,8 @@ type Server struct {
 	addr          string
 	dataDir       string               // Data directory for witness operations
 	heartbeats    map[string]time.Time // witnessID -> last heartbeat timestamp
-	authMethod    string               // "oidc" or "mtls"
+	heartbeatsMux sync.RWMutex
+	authMethod    string // "oidc" or "mtls"
 	oidcProvider  *oidc.Provider
 	oidcVerifier  *oidc.IDTokenVerifier
 	oauth2Config  *oauth2.Config
@@ -978,12 +979,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		ws := &WitnessStatus{
 			WitnessInfo: info,
 		}
+		s.heartbeatsMux.RLock()
 		if hbTime, ok := s.heartbeats[info.WitnessID]; ok {
 			ws.LastHeartbeat = hbTime
 			ws.SecondsSinceHB = int(time.Since(hbTime).Seconds())
 			// Consider online if heartbeat within last 30 seconds
 			ws.Online = time.Since(hbTime) < 30*time.Second
 		}
+		s.heartbeatsMux.RUnlock()
 		witnessStatuses = append(witnessStatuses, ws)
 	}
 
@@ -1174,7 +1177,9 @@ func (s *Server) handleWitnessHeartbeat(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Update heartbeat timestamp
+	s.heartbeatsMux.Lock()
 	s.heartbeats[witnessID] = time.Now()
+	s.heartbeatsMux.Unlock()
 	s.logger.Debug("Heartbeat received", "witness_id", witnessID)
 
 	w.Header().Set("Content-Type", "application/json")
