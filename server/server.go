@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,6 +72,7 @@ type OIDCConfig struct {
 	ClientID                  string   `mapstructure:"client_id"`
 	ClientSecret              string   `mapstructure:"client_secret"`
 	RedirectURL               string   `mapstructure:"redirect_url"`
+	CACertFile                string   `mapstructure:"ca_cert_file"`
 	RequireClientCertForToken bool     `mapstructure:"require_client_cert_for_token"`
 	AllowedDomains            []string `mapstructure:"allowed_domains"`
 	AdminEmails               []string `mapstructure:"admin_emails"`
@@ -106,13 +109,39 @@ func (s *Server) SetupOIDC(config OIDCConfig) error {
 	}
 
 	ctx := context.Background()
+
+	// Create HTTP client with custom CA if provided
+	var httpClient *http.Client
+	if config.CACertFile != "" {
+		caCert, err := os.ReadFile(config.CACertFile)
+		if err != nil {
+			return fmt.Errorf("failed to read CA certificate: %w", err)
+		}
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return fmt.Errorf("failed to parse CA certificate")
+		}
+		httpClient = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					RootCAs: caCertPool,
+				},
+			},
+		}
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, httpClient)
+		s.logger.Info("Using custom CA certificate for OIDC", "ca_file", config.CACertFile)
+	}
+
 	provider, err := oidc.NewProvider(ctx, config.IssuerURL)
 	if err != nil {
 		return fmt.Errorf("failed to create OIDC provider: %w", err)
 	}
 
 	s.oidcProvider = provider
-	s.oidcVerifier = provider.Verifier(&oidc.Config{ClientID: config.ClientID})
+	s.oidcVerifier = provider.Verifier(&oidc.Config{
+		ClientID:          config.ClientID,
+		SkipClientIDCheck: true, // Allow tokens from any client in the realm
+	})
 	s.oidcConfig = config
 
 	s.oauth2Config = &oauth2.Config{
@@ -204,7 +233,7 @@ func (s *Server) Start(config ServerConfig) error {
 	mux.HandleFunc("/api/witness/observations", s.requireAuth("witness", s.handleWitnessObservations))
 	mux.HandleFunc("/api/witness/cosignatures", s.handleGetCosignatures)
 	mux.HandleFunc("/api/witness/heartbeat", s.handleWitnessHeartbeat)
-	
+
 	// Witness gossip endpoints (for cross-checking)
 	mux.HandleFunc("/api/witness/gossip", s.handleWitnessGossip)
 	mux.HandleFunc("/api/witness/", s.handleWitnessLatestState)
@@ -324,7 +353,73 @@ func (s *Server) requireAuth(role string, next http.HandlerFunc) http.HandlerFun
 			return
 		}
 
-		// Use OIDC authentication
+		// Use OIDC authentication - check Bearer token first, then session cookie
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "" && len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+			token := authHeader[7:]
+
+			// Verify JWT token
+			idToken, err := s.oidcVerifier.Verify(r.Context(), token)
+			if err != nil {
+				s.logger.Warn("Invalid JWT token", "error", err)
+				http.Error(w, "Invalid authentication token", http.StatusUnauthorized)
+				return
+			}
+
+			// Extract claims
+			var claims struct {
+				Email         string `json:"email"`
+				EmailVerified bool   `json:"email_verified"`
+			}
+			if err := idToken.Claims(&claims); err != nil {
+				s.logger.Warn("Failed to parse token claims", "error", err)
+				http.Error(w, "Invalid token claims", http.StatusUnauthorized)
+				return
+			}
+
+			// Check role-based access
+			isAdmin := false
+			isWitness := false
+
+			for _, adminEmail := range s.oidcConfig.AdminEmails {
+				if claims.Email == adminEmail {
+					isAdmin = true
+					break
+				}
+			}
+
+			for _, witnessEmail := range s.oidcConfig.WitnessEmails {
+				if claims.Email == witnessEmail {
+					isWitness = true
+					break
+				}
+			}
+
+			if role == "admin" && !isAdmin {
+				s.logger.Warn("Unauthorized admin access attempt via token", "email", claims.Email)
+				http.Error(w, "Admin access required", http.StatusForbidden)
+				return
+			}
+
+			if role == "witness" && !isWitness && !isAdmin {
+				s.logger.Warn("Unauthorized witness access attempt via token", "email", claims.Email)
+				http.Error(w, "Witness access required", http.StatusForbidden)
+				return
+			}
+
+			// Add user info to headers for handlers
+			r.Header.Set("X-User-Email", claims.Email)
+			if isAdmin {
+				r.Header.Set("X-User-Role", "admin")
+			} else if isWitness {
+				r.Header.Set("X-User-Role", "witness")
+			}
+
+			next(w, r)
+			return
+		}
+
+		// Fall back to session cookie authentication
 		session := s.getSessionFromRequest(r)
 		if session == nil {
 			http.Error(w, "Authentication required", http.StatusUnauthorized)
@@ -891,8 +986,38 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		witnessStatuses = append(witnessStatuses, ws)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	// Check quorum if configured (example: require 2/3 of 3 witnesses)
+	var quorumStatus map[string]interface{}
+	if len(witnessDetails) > 0 {
+		// Example quorum config - could be loaded from config file
+		knownWitnesses := make([]string, 0, len(witnessDetails))
+		for witnessID := range witnessDetails {
+			knownWitnesses = append(knownWitnesses, witnessID)
+		}
+
+		quorumConfig := tlog.QuorumConfig{
+			MinWitnesses:    2,
+			QuorumThreshold: 0.67,
+			KnownWitnesses:  knownWitnesses,
+		}
+
+		cosignatures, _ := s.log.GetWitnessCosignatures(treeSize)
+		quorumResult, _ := tlog.CheckQuorum(cosignatures, quorumConfig, treeSize, treeHash)
+
+		if quorumResult != nil {
+			quorumStatus = map[string]interface{}{
+				"quorum_achieved":     quorumResult.QuorumAchieved,
+				"required_signatures": quorumResult.RequiredSignatures,
+				"received_signatures": quorumResult.ReceivedSignatures,
+				"signing_witnesses":   quorumResult.SigningWitnesses,
+				"missing_witnesses":   quorumResult.MissingWitnesses,
+				"threshold":           quorumConfig.QuorumThreshold,
+				"details":             quorumResult.Details,
+			}
+		}
+	}
+
+	response := map[string]interface{}{
 		"status":               status,
 		"tree_size":            treeSize,
 		"tree_hash":            fmt.Sprintf("%x", treeHash),
@@ -901,7 +1026,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"active_witnesses":     len(witnessDetails),
 		"witnesses":            witnessStatuses,
 		"witnessed_tree_sizes": witnessedTreeSizes,
-	})
+	}
+
+	if quorumStatus != nil {
+		response["quorum"] = quorumStatus
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // Witness observes tree state (mTLS authenticated)
@@ -1147,9 +1279,9 @@ func (s *Server) handleWitnessGossip(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":    true,
-		"consistent": consistent,
-		"details":    details,
+		"success":         true,
+		"consistent":      consistent,
+		"details":         details,
 		"local_tree_size": treeSize,
 		"local_tree_hash": treeHash,
 	})

@@ -23,6 +23,9 @@ type StorageBackend interface {
 	// GetLatestWitnessCosignatures returns witness sigs for current tree
 	GetLatestWitnessCosignatures() ([]WitnessCosignature, error)
 
+	// GetWitnessCosignatures returns witness sigs for a specific tree size
+	GetWitnessCosignatures(treeSize int64) ([]WitnessCosignature, error)
+
 	// VerifyIntegrity verifies the integrity of the log
 	VerifyIntegrity() error
 }

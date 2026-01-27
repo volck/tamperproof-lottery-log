@@ -318,6 +318,41 @@ func (l *LotteryLog) GetLatestWitnessCosignatures() ([]tlog.WitnessCosignature, 
 	return cosigs, rows.Err()
 }
 
+// GetWitnessCosignatures returns all witness cosignatures for a specific tree size
+func (l *LotteryLog) GetWitnessCosignatures(treeSize int64) ([]tlog.WitnessCosignature, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Get all witness signatures for this tree size
+	rows, err := l.conn.DB().QueryContext(ctx, `
+		SELECT signature_data 
+		FROM witness_signatures_blockchain 
+		WHERE tree_size = :1
+		ORDER BY signed_at
+	`, treeSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query witness signatures: %w", err)
+	}
+	defer rows.Close()
+
+	var cosigs []tlog.WitnessCosignature
+	for rows.Next() {
+		var sigData string
+		if err := rows.Scan(&sigData); err != nil {
+			return nil, fmt.Errorf("failed to scan signature: %w", err)
+		}
+
+		var cosig tlog.WitnessCosignature
+		if err := json.Unmarshal([]byte(sigData), &cosig); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal signature: %w", err)
+		}
+
+		cosigs = append(cosigs, cosig)
+	}
+
+	return cosigs, rows.Err()
+}
+
 // VerifyIntegrity uses Oracle's built-in blockchain verification
 func (l *LotteryLog) VerifyIntegrity() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

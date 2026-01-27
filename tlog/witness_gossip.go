@@ -49,13 +49,13 @@ func (wm *WitnessManager) CrossCheckWithPeers(peers []WitnessPeer, httpClient *h
 	if err != nil {
 		return nil, fmt.Errorf("failed to get local witnessed states: %w", err)
 	}
-	
+
 	if len(states) == 0 {
 		return nil, fmt.Errorf("no local witnessed states found")
 	}
-	
+
 	localState := states[len(states)-1]
-	
+
 	check := &WitnessConsistencyCheck{
 		LocalWitnessID:    wm.witnessID,
 		LocalTreeSize:     localState.TreeSize,
@@ -65,7 +65,7 @@ func (wm *WitnessManager) CrossCheckWithPeers(peers []WitnessPeer, httpClient *h
 		OverallConsistent: true,
 		CheckedAt:         time.Now(),
 	}
-	
+
 	// Use default insecure client if none provided
 	if httpClient == nil {
 		httpClient = &http.Client{
@@ -77,17 +77,17 @@ func (wm *WitnessManager) CrossCheckWithPeers(peers []WitnessPeer, httpClient *h
 			Timeout: 10 * time.Second,
 		}
 	}
-	
+
 	// Check each peer
 	for _, peer := range peers {
 		comparison := wm.checkPeerConsistency(peer, localState, httpClient)
 		check.PeerComparisons = append(check.PeerComparisons, comparison)
-		
+
 		if !comparison.Consistent {
 			check.OverallConsistent = false
 		}
 	}
-	
+
 	return check, nil
 }
 
@@ -97,7 +97,7 @@ func (wm *WitnessManager) checkPeerConsistency(peer WitnessPeer, localState Witn
 		PeerID:  peer.ID,
 		PeerURL: peer.URL,
 	}
-	
+
 	// Fetch peer's latest witnessed state
 	req, err := http.NewRequest("GET", peer.URL+"/api/witness/"+peer.ID+"/latest", nil)
 	if err != nil {
@@ -105,7 +105,7 @@ func (wm *WitnessManager) checkPeerConsistency(peer WitnessPeer, localState Witn
 		comparison.Consistent = false
 		return comparison
 	}
-	
+
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		comparison.Error = fmt.Sprintf("failed to connect: %v", err)
@@ -113,28 +113,28 @@ func (wm *WitnessManager) checkPeerConsistency(peer WitnessPeer, localState Witn
 		return comparison
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		comparison.Error = fmt.Sprintf("peer returned status %d: %s", resp.StatusCode, string(body))
 		comparison.Consistent = false
 		return comparison
 	}
-	
+
 	var peerState WitnessedState
 	if err := json.NewDecoder(resp.Body).Decode(&peerState); err != nil {
 		comparison.Error = fmt.Sprintf("failed to decode peer response: %v", err)
 		comparison.Consistent = false
 		return comparison
 	}
-	
+
 	comparison.PeerTreeSize = peerState.TreeSize
 	comparison.PeerTreeHash = peerState.TreeHash
 	comparison.PeerTimestamp = peerState.Timestamp
-	
+
 	// Check consistency
 	comparison.Consistent, comparison.Details = wm.compareStates(localState, peerState)
-	
+
 	return comparison
 }
 
@@ -144,23 +144,23 @@ func (wm *WitnessManager) compareStates(local, peer WitnessedState) (bool, strin
 	if local.TreeSize == peer.TreeSize && local.TreeHash == peer.TreeHash {
 		return true, "Tree size and hash match exactly"
 	}
-	
+
 	// Peer is ahead - this is acceptable if hashes are consistent for our size
 	if peer.TreeSize > local.TreeSize {
 		return true, fmt.Sprintf("Peer is ahead (size %d vs %d) - acceptable", peer.TreeSize, local.TreeSize)
 	}
-	
+
 	// We are ahead - also acceptable
 	if local.TreeSize > peer.TreeSize {
 		return true, fmt.Sprintf("Local is ahead (size %d vs %d) - acceptable", local.TreeSize, peer.TreeSize)
 	}
-	
+
 	// Same size but different hash = FORK DETECTED!
 	if local.TreeSize == peer.TreeSize && local.TreeHash != peer.TreeHash {
 		return false, fmt.Sprintf("FORK DETECTED! Same tree size (%d) but different hashes: local=%s peer=%s",
 			local.TreeSize, local.TreeHash[:16], peer.TreeHash[:16])
 	}
-	
+
 	return true, "Acceptable state difference"
 }
 
@@ -170,25 +170,25 @@ func (wm *WitnessManager) ShareWitnessedState(peerURL string, httpClient *http.C
 	if err != nil {
 		return fmt.Errorf("failed to get witnessed states: %w", err)
 	}
-	
+
 	if len(states) == 0 {
 		return fmt.Errorf("no witnessed states to share")
 	}
-	
+
 	latestState := states[len(states)-1]
-	
+
 	data, err := json.Marshal(latestState)
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
-	
+
 	req, err := http.NewRequest("POST", peerURL+"/api/witness/gossip", bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-	
+
 	req.Header.Set("Content-Type", "application/json")
-	
+
 	if httpClient == nil {
 		httpClient = &http.Client{
 			Transport: &http.Transport{
@@ -199,23 +199,23 @@ func (wm *WitnessManager) ShareWitnessedState(peerURL string, httpClient *http.C
 			Timeout: 10 * time.Second,
 		}
 	}
-	
+
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send state: %w", err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("peer returned status %d: %s", resp.StatusCode, string(body))
 	}
-	
+
 	slog.Info("Shared witnessed state with peer",
 		"peer_url", peerURL,
 		"tree_size", latestState.TreeSize,
 		"tree_hash", latestState.TreeHash[:16]+"...")
-	
+
 	return nil
 }
 
@@ -226,17 +226,17 @@ func (wm *WitnessManager) ReceiveWitnessGossip(receivedState WitnessedState) err
 	if err != nil {
 		return fmt.Errorf("failed to get local states: %w", err)
 	}
-	
+
 	if len(states) == 0 {
 		slog.Warn("Received gossip but have no local state to compare")
 		return nil
 	}
-	
+
 	localState := states[len(states)-1]
-	
+
 	// Compare states
 	consistent, details := wm.compareStates(localState, receivedState)
-	
+
 	if !consistent {
 		slog.Error("INCONSISTENCY DETECTED IN WITNESS GOSSIP",
 			"remote_witness", receivedState.WitnessID,
@@ -247,11 +247,11 @@ func (wm *WitnessManager) ReceiveWitnessGossip(receivedState WitnessedState) err
 			"details", details)
 		return fmt.Errorf("inconsistency detected: %s", details)
 	}
-	
+
 	slog.Info("Received consistent gossip from peer witness",
 		"remote_witness", receivedState.WitnessID,
 		"remote_tree_size", receivedState.TreeSize,
 		"details", details)
-	
+
 	return nil
 }

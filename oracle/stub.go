@@ -68,6 +68,10 @@ func (l *LotteryLog) GetLatestWitnessCosignatures() ([]tlog.WitnessCosignature, 
 	return nil, fmt.Errorf("Oracle support not compiled in")
 }
 
+func (l *LotteryLog) GetWitnessCosignatures(treeSize int64) ([]tlog.WitnessCosignature, error) {
+	return nil, fmt.Errorf("Oracle support not compiled in")
+}
+
 func (l *LotteryLog) VerifyIntegrity() error {
 	return fmt.Errorf("Oracle support not compiled in")
 }
