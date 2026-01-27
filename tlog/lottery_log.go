@@ -1,11 +1,15 @@
 package tlog
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/mod/sumdb/tlog"
@@ -491,4 +495,101 @@ func (l *LotteryLog) ListDraws(startIndex, endIndex int64) ([]*LotteryDraw, erro
 		draws = append(draws, draw)
 	}
 	return draws, nil
+}
+
+// ValidateLogEntryMAC verifies the HMAC-SHA256 signature of a single log entry.
+// It replaces the MAC field with zeros, computes the HMAC, and compares it with the original MAC.
+// Returns nil if valid, or an error describing the mismatch.
+func ValidateLogEntryMAC(logEntryJSON string, logKey string) error {
+	const zeroMAC = "0000000000000000000000000000000000000000000000000000000000000000"
+
+	// Parse the JSON to extract the MAC
+	var entry map[string]interface{}
+	if err := json.Unmarshal([]byte(logEntryJSON), &entry); err != nil {
+		return fmt.Errorf("failed to parse log entry JSON: %w", err)
+	}
+
+	// Extract the MAC from the entry
+	messageMACInterface, ok := entry["mac"]
+	if !ok {
+		return fmt.Errorf("log entry missing 'mac' field")
+	}
+
+	messageMAC, ok := messageMACInterface.(string)
+	if !ok {
+		return fmt.Errorf("'mac' field is not a string")
+	}
+
+	// Replace the MAC with zeros in the JSON string
+	// This needs to preserve the exact JSON structure
+	modifiedJSON := strings.Replace(logEntryJSON, messageMAC, zeroMAC, 1)
+
+	// Compute HMAC-SHA256
+	keyBytes, err := hex.DecodeString(logKey)
+	if err != nil {
+		return fmt.Errorf("failed to decode log key as hex: %w", err)
+	}
+
+	h := hmac.New(sha256.New, keyBytes)
+	h.Write([]byte(modifiedJSON))
+	computedMAC := hex.EncodeToString(h.Sum(nil))
+
+	// Compare MACs
+	if computedMAC != messageMAC {
+		return fmt.Errorf("MAC mismatch: expected %s, got %s", computedMAC, messageMAC)
+	}
+
+	return nil
+}
+
+// ValidateLogFile reads a log file line by line and validates each entry's MAC.
+// Returns the number of lines checked and an error if any validation fails.
+func ValidateLogFile(logFilePath, keyFilePath string) (int, error) {
+	// Read the key file
+	keyData, err := os.ReadFile(keyFilePath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read key file: %w", err)
+	}
+
+	var keyConfig struct {
+		Logs struct {
+			Key string `json:"key"`
+		} `json:"logs"`
+	}
+
+	if err := json.Unmarshal(keyData, &keyConfig); err != nil {
+		return 0, fmt.Errorf("failed to parse key file JSON: %w", err)
+	}
+
+	logKey := keyConfig.Logs.Key
+	if logKey == "" {
+		return 0, fmt.Errorf("log key not found in key file")
+	}
+
+	// Read the log file
+	logData, err := os.ReadFile(logFilePath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read log file: %w", err)
+	}
+
+	// Split by newlines and process each line
+	lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
+	errors := 0
+
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+
+		if err := ValidateLogEntryMAC(line, logKey); err != nil {
+			slog.Error("MAC validation failed", "line", i+1, "error", err, "content", line)
+			errors++
+		}
+	}
+
+	if errors > 0 {
+		return len(lines), fmt.Errorf("FAILED: %d error(s) out of %d lines", errors, len(lines))
+	}
+
+	return len(lines), nil
 }
