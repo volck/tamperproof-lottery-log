@@ -18,3 +18,5 @@ lottery-data/
 *.swp
 *.swo
 *~
+lottery-tlog-test
+tlog/lottery-tlog-test
