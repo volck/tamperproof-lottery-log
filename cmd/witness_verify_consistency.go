@@ -11,7 +11,7 @@ import (
 )
 
 var witnessVerifyConsistencyCmd = &cobra.Command{
-	Use:          "witness-verify-consistency",
+	Use:          "verify-consistency",
 	Short:        "Verify consistency between witnessed states",
 	Long:         "Verify that the tree has grown consistently between two witnessed states. This detects if the log has been tampered with or rolled back.",
 	SilenceUsage: true,
@@ -86,6 +86,4 @@ func init() {
 	witnessVerifyConsistencyCmd.MarkFlagRequired("witness-id")
 	witnessVerifyConsistencyCmd.MarkFlagRequired("old-index")
 	witnessVerifyConsistencyCmd.MarkFlagRequired("new-index")
-
-	rootCmd.AddCommand(witnessVerifyConsistencyCmd)
 }

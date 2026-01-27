@@ -19,7 +19,7 @@ var (
 )
 
 var proveConsistencyCmd = &cobra.Command{
-	Use:   "prove-consistency",
+	Use:   "consistency-prove",
 	Short: "Generate a consistency proof between two tree states",
 	Long: `Generate a cryptographic proof that the tree grew consistently from size N to size M.
 	
@@ -29,7 +29,7 @@ This proves no historical records were modified, only new ones added.`,
 }
 
 var verifyConsistencyCmd = &cobra.Command{
-	Use:   "verify-consistency",
+	Use:   "consistency-verify",
 	Short: "Verify a consistency proof between two tree states",
 	Long: `Verify that a tree grew consistently from one state to another.
 	
@@ -39,9 +39,6 @@ Only requires the two tree sizes, their hashes, and the proof.`,
 }
 
 func init() {
-	rootCmd.AddCommand(proveConsistencyCmd)
-	rootCmd.AddCommand(verifyConsistencyCmd)
-
 	proveConsistencyCmd.Flags().Int64Var(&oldSize, "old-size", 0, "Old tree size (required)")
 	proveConsistencyCmd.Flags().Int64Var(&newSize, "new-size", 0, "New tree size (leave empty to use current)")
 	proveConsistencyCmd.Flags().StringVarP(&outputFileCP, "output", "o", "", "Output file for proof (default: stdout)")

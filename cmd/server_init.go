@@ -19,7 +19,7 @@ import (
 )
 
 var serverInitCmd = &cobra.Command{
-	Use:   "server-init",
+	Use:   "init",
 	Short: "Initialize server certificates",
 	Long: `Initialize the server by generating self-signed certificates for development.
 	
@@ -66,7 +66,7 @@ In production, use certificates from a trusted CA.`,
 }
 
 func init() {
-	rootCmd.AddCommand(serverInitCmd)
+	// serverInitCmd is registered in server.go
 }
 
 func generateCA(certDir string) error {

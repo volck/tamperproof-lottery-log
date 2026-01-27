@@ -20,7 +20,7 @@ var (
 )
 
 var proveInclusionCmd = &cobra.Command{
-	Use:   "prove-inclusion",
+	Use:   "inclusion-prove",
 	Short: "Generate an inclusion proof for a draw",
 	Long: `Generate a cryptographic proof that a specific draw exists in the tree.
 	
@@ -30,7 +30,7 @@ This proof can be verified by anyone without needing the entire log.`,
 }
 
 var verifyInclusionCmd = &cobra.Command{
-	Use:   "verify-inclusion",
+	Use:   "inclusion-verify",
 	Short: "Verify an inclusion proof for a draw",
 	Long: `Verify that a draw exists in the tree using only the proof, draw data, and tree hash.
 	
@@ -40,9 +40,6 @@ Does not require access to the full log.`,
 }
 
 func init() {
-	rootCmd.AddCommand(proveInclusionCmd)
-	rootCmd.AddCommand(verifyInclusionCmd)
-
 	proveInclusionCmd.Flags().Int64Var(&drawIndex, "index", 0, "Index of the draw to prove (required)")
 	proveInclusionCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file for proof (default: stdout)")
 	proveInclusionCmd.MarkFlagRequired("index")

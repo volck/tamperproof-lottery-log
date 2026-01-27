@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -206,7 +207,7 @@ func (tm *TokenManager) refreshWithPassword() error {
 }
 
 var witnessObserveCmd = &cobra.Command{
-	Use:          "witness-observe",
+	Use:          "observe",
 	Short:        "Observe and sign the current tree state",
 	Long:         "Record the current lottery log tree state (size and hash) and sign it with your witness certificate. This creates a tamper-evident record. Use --watch to continuously monitor for new draws.",
 	SilenceUsage: true,
@@ -449,7 +450,7 @@ func watchServer(witnessID, serverURL, dataDir string, interval time.Duration, p
 
 	// Load peer configuration if provided
 	var peers []tlog.WitnessPeer
-	
+
 	if peersFile != "" {
 		peersData, err := os.ReadFile(peersFile)
 		if err != nil {
@@ -477,15 +478,15 @@ func watchServer(witnessID, serverURL, dataDir string, interval time.Duration, p
 		if len(peers) == 0 {
 			return
 		}
-		
+
 		slog.Info("Performing cross-check with peer witnesses", "peer_count", len(peers))
-		
+
 		check, err := wm.CrossCheckWithPeers(peers, client)
 		if err != nil {
 			slog.Error("Cross-check failed", "error", err)
 			return
 		}
-		
+
 		if check.OverallConsistent {
 			slog.Info("Cross-check completed: all peers consistent",
 				"peers_checked", len(check.PeerComparisons),
@@ -494,7 +495,7 @@ func watchServer(witnessID, serverURL, dataDir string, interval time.Duration, p
 			slog.Error("CROSS-CHECK INCONSISTENCY DETECTED",
 				"local_tree_size", check.LocalTreeSize,
 				"local_tree_hash", check.LocalTreeHash)
-			
+
 			fmt.Printf("\n⚠️  WARNING: Cross-check detected inconsistencies!\n")
 			for _, peer := range check.PeerComparisons {
 				if !peer.Consistent {
@@ -508,13 +509,13 @@ func watchServer(witnessID, serverURL, dataDir string, interval time.Duration, p
 	// Continuous monitoring loop
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	
+
 	// Cross-check ticker (if peers configured)
 	var crossCheckTicker *time.Ticker
 	if len(peers) > 0 {
 		crossCheckTicker = time.NewTicker(crossCheckInterval)
 		defer crossCheckTicker.Stop()
-		
+
 		// Perform initial cross-check
 		go performCrossCheck()
 	}
@@ -553,7 +554,7 @@ func watchServer(witnessID, serverURL, dataDir string, interval time.Duration, p
 				req.Header.Set("Authorization", "Bearer "+token)
 			}
 			req.Header.Set("Content-Type", "application/json")
-			
+
 			resp, err := client.Do(req)
 			if err != nil {
 				slog.Error("Failed to connect to server", "error", err)
@@ -597,7 +598,7 @@ func watchServer(witnessID, serverURL, dataDir string, interval time.Duration, p
 			} else {
 				fmt.Printf(".")
 			}
-			
+
 		case <-func() <-chan time.Time {
 			if crossCheckTicker != nil {
 				return crossCheckTicker.C
@@ -621,6 +622,7 @@ func init() {
 	witnessObserveCmd.Flags().String("client-secret", "", "OIDC client secret")
 	witnessObserveCmd.Flags().String("username", "", "Username for OIDC authentication")
 	witnessObserveCmd.Flags().String("password", "", "Password for OIDC authentication")
+	witnessObserveCmd.Flags().String("ca-cert", "", "Path to CA certificate file for verifying server certificates")
 	witnessObserveCmd.Flags().String("peers", "", "Path to JSON file containing peer witness configurations (for cross-checking)")
 	witnessObserveCmd.Flags().Duration("cross-check-interval", 5*time.Minute, "Interval for cross-checking with peer witnesses in watch mode")
 
@@ -630,9 +632,9 @@ func init() {
 	viper.BindPFlag("client_secret", witnessObserveCmd.Flags().Lookup("client-secret"))
 	viper.BindPFlag("username", witnessObserveCmd.Flags().Lookup("username"))
 	viper.BindPFlag("password", witnessObserveCmd.Flags().Lookup("password"))
+	viper.BindPFlag("ca_cert", witnessObserveCmd.Flags().Lookup("ca-cert"))
 
 	witnessObserveCmd.MarkFlagRequired("witness-id")
-	rootCmd.AddCommand(witnessObserveCmd)
 }
 
 // createAuthenticatedClient creates an HTTP client with appropriate authentication
@@ -644,6 +646,7 @@ func createAuthenticatedClient(witnessID, serverURL, dataDir string) (*http.Clie
 	clientSecret := viper.GetString("client_secret")
 	username := viper.GetString("username")
 	password := viper.GetString("password")
+	caCertPath := viper.GetString("ca_cert")
 
 	// Load witness certificate (may be needed for mTLS to Keycloak or direct mTLS to server)
 	certPath := filepath.Join(dataDir, "witnesses", witnessID, "witness-cert.pem")
@@ -665,8 +668,23 @@ func createAuthenticatedClient(witnessID, serverURL, dataDir string) (*http.Clie
 
 		// Create client for Keycloak (with or without mTLS)
 		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: caCertPath == "",
 		}
+
+		// Load CA certificate if provided
+		if caCertPath != "" {
+			caCert, err := os.ReadFile(caCertPath)
+			if err != nil {
+				return nil, "", nil, fmt.Errorf("failed to read CA certificate: %w", err)
+			}
+			caCertPool := x509.NewCertPool()
+			if !caCertPool.AppendCertsFromPEM(caCert) {
+				return nil, "", nil, fmt.Errorf("failed to parse CA certificate")
+			}
+			tlsConfig.RootCAs = caCertPool
+			slog.Info("Using custom CA certificate", "ca_cert", caCertPath)
+		}
+
 		if hasCert {
 			tlsConfig.Certificates = []tls.Certificate{cert}
 			slog.Info("Using client certificate for Keycloak authentication")
@@ -711,11 +729,26 @@ func createAuthenticatedClient(witnessID, serverURL, dataDir string) (*http.Clie
 			"has_refresh_token", tokenResp.RefreshToken != "")
 
 		// Return client WITHOUT certificate (JWT-only auth to server)
+		apiTLSConfig := &tls.Config{
+			InsecureSkipVerify: caCertPath == "",
+		}
+
+		// Load CA certificate if provided
+		if caCertPath != "" {
+			caCert, err := os.ReadFile(caCertPath)
+			if err != nil {
+				return nil, "", nil, fmt.Errorf("failed to read CA certificate for API client: %w", err)
+			}
+			caCertPool := x509.NewCertPool()
+			if !caCertPool.AppendCertsFromPEM(caCert) {
+				return nil, "", nil, fmt.Errorf("failed to parse CA certificate for API client")
+			}
+			apiTLSConfig.RootCAs = caCertPool
+		}
+
 		apiClient := &http.Client{
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-				},
+				TLSClientConfig: apiTLSConfig,
 			},
 			Timeout: 30 * time.Second,
 		}

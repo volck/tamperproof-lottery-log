@@ -10,8 +10,8 @@ import (
 	"github.com/spf13/viper"
 )
 
-var serverCmd = &cobra.Command{
-	Use:          "server",
+var serverStartCmd = &cobra.Command{
+	Use:          "start",
 	Short:        "Start the lottery transparency log server",
 	Long:         "Start an HTTPS server with mTLS authentication for witnesses. Witnesses connect using their X.509 certificates to observe draws and verify the log.",
 	SilenceUsage: true,
@@ -44,4 +44,16 @@ var serverCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(serverCmd)
+	serverCmd.AddCommand(serverStartCmd)
+	serverCmd.AddCommand(serverInitCmd)
+}
+
+var serverCmd = &cobra.Command{
+	Use:   "server",
+	Short: "Server commands for the transparency log",
+	Long: `Commands for managing the lottery transparency log server.
+
+Available subcommands:
+  start    Start the HTTPS server with mTLS or OIDC authentication
+  init     Initialize server certificates for development`,
 }

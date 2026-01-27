@@ -11,7 +11,7 @@ import (
 )
 
 var witnessInitCmd = &cobra.Command{
-	Use:          "witness-init",
+	Use:          "init",
 	Short:        "Initialize as a witness with certificate generation",
 	Long:         "Generate a cryptographic certificate (RSA key pair) for witnessing lottery draws. This allows you to sign and verify tree states.",
 	SilenceUsage: true,
@@ -51,5 +51,4 @@ var witnessInitCmd = &cobra.Command{
 func init() {
 	witnessInitCmd.Flags().String("witness-id", "", "Unique identifier for this witness (required)")
 	witnessInitCmd.MarkFlagRequired("witness-id")
-	rootCmd.AddCommand(witnessInitCmd)
 }

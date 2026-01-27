@@ -11,7 +11,7 @@ import (
 )
 
 var witnessListCmd = &cobra.Command{
-	Use:          "witness-list",
+	Use:          "list",
 	Short:        "List all witnessed tree states",
 	Long:         "Display all tree states that have been observed and signed by this witness. Each state includes tree size, hash, timestamp, and signature.",
 	SilenceUsage: true,
@@ -66,5 +66,4 @@ var witnessListCmd = &cobra.Command{
 func init() {
 	witnessListCmd.Flags().String("witness-id", "", "Your witness identifier (required)")
 	witnessListCmd.MarkFlagRequired("witness-id")
-	rootCmd.AddCommand(witnessListCmd)
 }

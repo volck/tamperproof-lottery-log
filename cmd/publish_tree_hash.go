@@ -53,7 +53,7 @@ var publishTreeHashCmd = &cobra.Command{
 		fmt.Printf("  - Newspaper publication\n")
 		fmt.Printf("  - Blockchain timestamp service\n\n")
 		fmt.Printf("Witnesses should observe this hash using:\n")
-		fmt.Printf("  lottery-tlog witness-observe --witness-id <id>\n")
+		fmt.Printf("  lottery-tlog witness observe --witness-id <id>\n")
 		fmt.Printf("===========================================\n\n")
 
 		return nil

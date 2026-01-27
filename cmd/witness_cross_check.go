@@ -14,7 +14,7 @@ import (
 )
 
 var witnessCrossCheckCmd = &cobra.Command{
-	Use:   "witness-cross-check",
+	Use:   "cross-check",
 	Short: "Cross-check witness observations with peer witnesses",
 	Long: `Compare your witnessed tree states with other witnesses to ensure consistency.
 This detects any attempts to show different log states to different witnesses (fork attacks).`,
@@ -159,5 +159,4 @@ func init() {
 
 	witnessCrossCheckCmd.MarkFlagRequired("witness-id")
 	witnessCrossCheckCmd.MarkFlagRequired("peers")
-	rootCmd.AddCommand(witnessCrossCheckCmd)
 }
