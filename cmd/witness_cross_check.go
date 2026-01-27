@@ -30,7 +30,7 @@ This detects any attempts to show different log states to different witnesses (f
 			return fmt.Errorf("peers file is required")
 		}
 
-		dataDir := viper.GetString("log_directory")
+		dataDir := getDataDir()
 
 		// Load witness manager
 		wm, err := tlog.NewWitnessManager(dataDir, witnessID)

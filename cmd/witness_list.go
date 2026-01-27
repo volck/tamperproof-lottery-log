@@ -21,7 +21,7 @@ var witnessListCmd = &cobra.Command{
 			return fmt.Errorf("witness-id is required")
 		}
 
-		dataDir := viper.GetString("log_directory")
+		dataDir := getDataDir()
 		wm, err := tlog.NewWitnessManager(dataDir, witnessID)
 		if err != nil {
 			slog.Error("Failed to create witness manager", "error", err)

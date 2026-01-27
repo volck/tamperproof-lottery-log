@@ -24,7 +24,7 @@ var witnessVerifyConsistencyCmd = &cobra.Command{
 		oldIndex, _ := cmd.Flags().GetInt("old-index")
 		newIndex, _ := cmd.Flags().GetInt("new-index")
 
-		dataDir := viper.GetString("log_directory")
+		dataDir := getDataDir()
 		wm, err := tlog.NewWitnessManager(dataDir, witnessID)
 		if err != nil {
 			slog.Error("Failed to create witness manager", "error", err)

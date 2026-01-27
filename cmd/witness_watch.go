@@ -54,7 +54,7 @@ func runWitnessWatch(cmd *cobra.Command, args []string) error {
 	}))
 
 	// Get data directory from config
-	dataDir := viper.GetString("log_directory")
+	dataDir := getDataDir()
 	if dataDir == "" {
 		dataDir = ".lottery-data"
 	}
