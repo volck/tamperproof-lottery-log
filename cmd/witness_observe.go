@@ -551,7 +551,13 @@ func watchServer(witnessID, serverURL, dataDir string, interval time.Duration, p
 				slog.Error("Failed to create request", "error", err)
 				continue
 			}
-		req.Header.Set("X-Witness-ID", witnessID)
+			req.Header.Set("X-Witness-ID", witnessID)
+			token := getCurrentToken()
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			req.Header.Set("Content-Type", "application/json")
+
 			resp, err := client.Do(req)
 			if err != nil {
 				slog.Error("Failed to connect to server", "error", err)

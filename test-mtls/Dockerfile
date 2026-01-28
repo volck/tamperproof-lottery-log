@@ -1,5 +1,5 @@
 # Dockerfile for lottery-tlog server
-FROM golang:alpine AS builder
+FROM harbor.norsk-tipping.no/dockerhub/golang:alpine AS builder
 
 WORKDIR /build
 
@@ -17,7 +17,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o lottery-tlog .
 
 # Final stage
-FROM alpine:latest
+FROM harbor.norsk-tipping.no/dockerhub/alpine:latest
 
 WORKDIR /app
 
