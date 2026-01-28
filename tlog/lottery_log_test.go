@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestValidateLogEntryMAC tests the MAC validation function with various scenarios
@@ -304,4 +306,103 @@ func BenchmarkValidateLogEntryMAC(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = ValidateLogEntryMAC(entry, testKey)
 	}
+}
+
+// TestAddDraw_DuplicateDetection tests that duplicate SeqNo draws are rejected
+func TestAddDraw_DuplicateDetection(t *testing.T) {
+	// Create temporary directory for test
+	tmpDir := t.TempDir()
+
+	// Create a test logger
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelError, // Only show errors to keep test output clean
+	}))
+
+	// Create a new lottery log
+	log, err := NewLotteryLog(tmpDir, logger)
+	if err != nil {
+		t.Fatalf("Failed to create lottery log: %v", err)
+	}
+
+	// Create a test draw
+	draw1 := LotteryDraw{
+		SeqNo:     100,
+		Timestamp: mustParseTime("2026-01-28T10:00:00Z"),
+		IP:        "192.168.1.1",
+		Severity:  "info",
+		Message: Message{
+			Code: 301,
+			Text: "Test draw 1",
+		},
+		MAC: "test_mac_1",
+	}
+
+	// Add first draw - should succeed
+	err = log.AddDraw(draw1)
+	if err != nil {
+		t.Fatalf("Failed to add first draw: %v", err)
+	}
+
+	// Try to add same draw again (same SeqNo) - should fail
+	draw2 := LotteryDraw{
+		SeqNo:     100, // Same SeqNo as draw1
+		Timestamp: mustParseTime("2026-01-28T11:00:00Z"),
+		IP:        "192.168.1.2",
+		Severity:  "info",
+		Message: Message{
+			Code: 302,
+			Text: "Test draw 2 - duplicate",
+		},
+		MAC: "test_mac_2",
+	}
+
+	err = log.AddDraw(draw2)
+	if err == nil {
+		t.Fatal("Expected error when adding duplicate SeqNo, but got none")
+	}
+
+	if !strings.Contains(err.Error(), "duplicate draw") {
+		t.Errorf("Expected 'duplicate draw' error, got: %v", err)
+	}
+
+	if !strings.Contains(err.Error(), "SeqNo 100") {
+		t.Errorf("Expected error to mention 'SeqNo 100', got: %v", err)
+	}
+
+	// Add a draw with different SeqNo - should succeed
+	draw3 := LotteryDraw{
+		SeqNo:     101,
+		Timestamp: mustParseTime("2026-01-28T12:00:00Z"),
+		IP:        "192.168.1.3",
+		Severity:  "info",
+		Message: Message{
+			Code: 303,
+			Text: "Test draw 3 - different SeqNo",
+		},
+		MAC: "test_mac_3",
+	}
+
+	err = log.AddDraw(draw3)
+	if err != nil {
+		t.Fatalf("Failed to add draw with different SeqNo: %v", err)
+	}
+
+	// Verify tree size is 2 (draw1 and draw3)
+	size, err := log.GetTreeSize()
+	if err != nil {
+		t.Fatalf("Failed to get tree size: %v", err)
+	}
+
+	if size != 2 {
+		t.Errorf("Expected tree size 2, got %d", size)
+	}
+}
+
+// mustParseTime is a helper for tests
+func mustParseTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		panic(err)
+	}
+	return t
 }

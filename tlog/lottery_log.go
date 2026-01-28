@@ -177,16 +177,28 @@ func (l *LotteryLog) AddDraw(draw LotteryDraw) error {
 		"code", draw.Message.Code,
 		"timestamp", draw.Timestamp)
 
+	// Check for duplicate SeqNo
+	size, err := l.getTreeSize()
+	if err != nil {
+		return fmt.Errorf("failed to get tree size: %w", err)
+	}
+
+	// Scan existing draws to check for duplicate SeqNo
+	for i := int64(0); i < size; i++ {
+		existingDraw, err := l.GetDraw(i)
+		if err != nil {
+			l.logger.Warn("Failed to read draw during duplicate check", "index", i, "error", err)
+			continue
+		}
+		if existingDraw.SeqNo == draw.SeqNo {
+			return fmt.Errorf("duplicate draw: SeqNo %d already exists at index %d", draw.SeqNo, i)
+		}
+	}
+
 	// Serialize the draw
 	data, err := json.Marshal(draw)
 	if err != nil {
 		return fmt.Errorf("failed to marshal draw: %w", err)
-	}
-
-	// Get current tree size
-	size, err := l.getTreeSize()
-	if err != nil {
-		return fmt.Errorf("failed to get tree size: %w", err)
 	}
 
 	// Save the draw data
