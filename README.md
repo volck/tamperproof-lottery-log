@@ -219,6 +219,30 @@ View all states you've observed:
 ./lottery-tlog witness-list --witness-id "alice-auditor"
 ```
 
+#### Monitoring Security Alerts
+
+Witnesses can monitor for suspicious activity such as duplicate draw attempts:
+
+```bash
+# Check all security alerts
+./lottery-tlog witness alerts --witness-id "alice-auditor"
+
+# Check alerts since a specific time
+./lottery-tlog witness alerts --witness-id "alice-auditor" \
+  --since "2026-01-28T00:00:00Z"
+```
+
+Security alerts include:
+- **Duplicate draw attempts** - When someone tries to add a draw with an existing SeqNo
+- Source IP address
+- User identity (if authenticated)
+- Timestamp of the attempt
+
+This helps witnesses detect:
+- Malicious actors trying to manipulate the log
+- Configuration errors or bugs
+- Unauthorized access attempts
+
 #### Verifying Consistency Between States
 
 Verify the tree grew consistently (no rollbacks or tampering):

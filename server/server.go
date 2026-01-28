@@ -23,22 +23,34 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// SecurityAlert represents a security event that witnesses should be notified about
+type SecurityAlert struct {
+	Timestamp   time.Time `json:"timestamp"`
+	AlertType   string    `json:"alert_type"`
+	SeqNo       int       `json:"seqno,omitempty"`
+	Source      string    `json:"source"`
+	UserEmail   string    `json:"user_email,omitempty"`
+	Description string    `json:"description"`
+}
+
 // Server represents the lottery transparency log server
 type Server struct {
-	log           *tlog.LotteryLog
-	logger        *slog.Logger
-	tlsConfig     *tls.Config
-	addr          string
-	dataDir       string               // Data directory for witness operations
-	heartbeats    map[string]time.Time // witnessID -> last heartbeat timestamp
-	heartbeatsMux sync.RWMutex
-	authMethod    string // "oidc" or "mtls"
-	oidcProvider  *oidc.Provider
-	oidcVerifier  *oidc.IDTokenVerifier
-	oauth2Config  *oauth2.Config
-	oidcConfig    OIDCConfig
-	sessions      map[string]*Session // sessionID -> Session
-	sessionsMutex sync.RWMutex
+	log            *tlog.LotteryLog
+	logger         *slog.Logger
+	tlsConfig      *tls.Config
+	addr           string
+	dataDir        string               // Data directory for witness operations
+	heartbeats     map[string]time.Time // witnessID -> last heartbeat timestamp
+	heartbeatsMux  sync.RWMutex
+	alerts         []SecurityAlert // Security alerts for witnesses
+	alertsMux      sync.RWMutex
+	authMethod     string // "oidc" or "mtls"
+	oidcProvider   *oidc.Provider
+	oidcVerifier   *oidc.IDTokenVerifier
+	oauth2Config   *oauth2.Config
+	oidcConfig     OIDCConfig
+	sessions       map[string]*Session // sessionID -> Session
+	sessionsMutex  sync.RWMutex
 }
 
 // Session represents an authenticated user session
@@ -235,6 +247,7 @@ func (s *Server) Start(config ServerConfig) error {
 	mux.HandleFunc("/api/witness/observations", s.requireAuth("witness", s.handleWitnessObservations))
 	mux.HandleFunc("/api/witness/cosignatures", s.handleGetCosignatures)
 	mux.HandleFunc("/api/witness/heartbeat", s.handleWitnessHeartbeat)
+	mux.HandleFunc("/api/witness/alerts", s.requireAuth("witness", s.handleGetAlerts))
 
 	// Witness gossip endpoints (for cross-checking)
 	mux.HandleFunc("/api/witness/gossip", s.handleWitnessGossip)
@@ -1189,6 +1202,38 @@ func (s *Server) handleWitnessHeartbeat(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// handleGetAlerts returns security alerts for witnesses
+func (s *Server) handleGetAlerts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Optional: filter by time range using query params
+	sinceParam := r.URL.Query().Get("since")
+	var since time.Time
+	if sinceParam != "" {
+		if timestamp, err := time.Parse(time.RFC3339, sinceParam); err == nil {
+			since = timestamp
+		}
+	}
+
+	s.alertsMux.RLock()
+	alerts := make([]SecurityAlert, 0)
+	for _, alert := range s.alerts {
+		if since.IsZero() || alert.Timestamp.After(since) {
+			alerts = append(alerts, alert)
+		}
+	}
+	s.alertsMux.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"alerts": alerts,
+		"count":  len(alerts),
+	})
+}
+
 // Add a new draw (admin only)
 func (s *Server) handleAddDraw(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -1208,6 +1253,47 @@ func (s *Server) handleAddDraw(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.log.AddDraw(draw); err != nil {
+		// Check if it's a duplicate error
+		if strings.Contains(err.Error(), "duplicate draw") {
+			// Get user info from session
+			userEmail := "unknown"
+			if cookie, err := r.Cookie("session_id"); err == nil {
+				s.sessionsMutex.RLock()
+				if session, ok := s.sessions[cookie.Value]; ok {
+					userEmail = session.Email
+				}
+				s.sessionsMutex.RUnlock()
+			}
+
+			// Create security alert for witnesses
+			alert := SecurityAlert{
+				Timestamp:   time.Now(),
+				AlertType:   "duplicate_draw_attempt",
+				SeqNo:       draw.SeqNo,
+				Source:      r.RemoteAddr,
+				UserEmail:   userEmail,
+				Description: fmt.Sprintf("Attempt to add duplicate draw with SeqNo %d", draw.SeqNo),
+			}
+
+			s.alertsMux.Lock()
+			s.alerts = append(s.alerts, alert)
+			// Keep only last 100 alerts
+			if len(s.alerts) > 100 {
+				s.alerts = s.alerts[len(s.alerts)-100:]
+			}
+			s.alertsMux.Unlock()
+
+			s.logger.Warn("Duplicate draw attempt detected",
+				"seqno", draw.SeqNo,
+				"source", r.RemoteAddr,
+				"user_email", userEmail,
+				"error", err.Error())
+
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+
+		// Other errors
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
