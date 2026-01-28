@@ -42,9 +42,25 @@ func (l *LotteryLog) AddDraw(draw tlog.LotteryDraw) error {
 	defer cancel()
 
 	return l.conn.ExecuteInTransaction(ctx, func(tx *sql.Tx) error {
+		// Check for duplicate SeqNo
+		var existingIndex sql.NullInt64
+		err := tx.QueryRowContext(ctx, `
+			SELECT draw_index 
+			FROM lottery_draws_blockchain 
+			WHERE seqno = :1
+		`, draw.SeqNo).Scan(&existingIndex)
+		
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("failed to check for duplicate: %w", err)
+		}
+		
+		if existingIndex.Valid {
+			return fmt.Errorf("duplicate draw: SeqNo %d already exists at index %d", draw.SeqNo, existingIndex.Int64)
+		}
+
 		// Get current tree size
 		var currentSize int64
-		err := tx.QueryRowContext(ctx, `
+		err = tx.QueryRowContext(ctx, `
 			SELECT NVL(MAX(draw_index), -1) + 1 
 			FROM lottery_draws_blockchain
 		`).Scan(&currentSize)
