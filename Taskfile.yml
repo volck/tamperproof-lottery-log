@@ -2,12 +2,17 @@ version: '3'
 
 tasks:
   build:
-    desc: Build lottery-tlog (file backend)
+    desc: Build lottery-tlog for all platforms
     cmds:
-      - go build -o lottery-tlog .
+      - mkdir -p release
+      - GOOS=linux GOARCH=amd64 go build -o release/lottery-tlog-linux-amd64 .
+      - GOOS=linux GOARCH=arm64 go build -o release/lottery-tlog-linux-arm64 .
+      - GOOS=darwin GOARCH=amd64 go build -o release/lottery-tlog-darwin-amd64 .
+      - GOOS=darwin GOARCH=arm64 go build -o release/lottery-tlog-darwin-arm64 .
+      - GOOS=windows GOARCH=amd64 go build -o release/lottery-tlog-windows-amd64.exe .
 
   build-oracle:
-    desc: Build lottery-tlog-oracle (Oracle backend)
+    desc: Build lottery-tlog-oracle (Oracle backend) for native platform only
     env:
       PKG_CONFIG_PATH: /opt/oracle/instantclient_19_23/pkgconfig:$PKG_CONFIG_PATH
       LD_LIBRARY_PATH: /opt/oracle/instantclient_19_23:$LD_LIBRARY_PATH
@@ -15,7 +20,8 @@ tasks:
       CGO_CFLAGS: -I/opt/oracle/instantclient_19_23/sdk/include
       CGO_LDFLAGS: -L/opt/oracle/instantclient_19_23 -lclntsh
     cmds:
-      - go build -tags oracle -o lottery-tlog-oracle .
+      - mkdir -p release
+      - go build -tags oracle -o release/lottery-tlog-oracle .
 
   test:
     desc: Run tests
@@ -25,4 +31,4 @@ tasks:
   clean:
     desc: Remove built binaries
     cmds:
-      - rm -f lottery-tlog lottery-tlog-oracle
+      - rm -rf release
