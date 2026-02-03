@@ -1,0 +1,29 @@
+[Unit]
+Description=Lottery Transparency Log Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory={{ lottery_install_dir }}
+ExecStart={{ lottery_install_dir }}/lottery-tlog server --config {{ lottery_install_dir }}/config.yaml
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lottery-tlog
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ lottery_data_dir }}
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

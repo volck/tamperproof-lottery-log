@@ -1,0 +1,12 @@
+# Ansible generated files
+*.retry
+certs/
+/tmp
+
+# Generated certificate files
+*.pem
+*.csr
+*.srl
+
+# Ansible fact cache
+.ansible/

@@ -1,0 +1,127 @@
+---
+- name: Deploy Lottery Transparency Log Servers
+  hosts: lottery_servers
+  become: yes
+  
+  vars:
+    binary_path: "{{ playbook_dir }}/../../lottery-tlog"
+    certs_dir: "{{ playbook_dir }}/../certs"
+    
+  tasks:
+    - name: Create application directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - "{{ lottery_install_dir }}"
+        - "{{ lottery_install_dir }}/certs"
+        - "{{ lottery_data_dir }}"
+
+    - name: Check if binary exists locally
+      stat:
+        path: "{{ binary_path }}"
+      register: binary_stat
+      delegate_to: localhost
+      become: no
+
+    - name: Fail if binary not found
+      fail:
+        msg: "Binary not found at {{ binary_path }}. Please build it first with 'go build -o lottery-tlog .'"
+      when: not binary_stat.stat.exists
+
+    - name: Copy lottery-tlog binary
+      copy:
+        src: "{{ binary_path }}"
+        dest: "{{ lottery_install_dir }}/lottery-tlog"
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Copy CA certificate
+      copy:
+        src: "{{ certs_dir }}/ca-cert.pem"
+        dest: "{{ lottery_install_dir }}/certs/ca-cert.pem"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Copy server certificate
+      copy:
+        src: "{{ certs_dir }}/{{ inventory_hostname }}-cert.pem"
+        dest: "{{ lottery_install_dir }}/certs/server-cert.pem"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Copy server private key
+      copy:
+        src: "{{ certs_dir }}/{{ inventory_hostname }}-key.pem"
+        dest: "{{ lottery_install_dir }}/certs/server-key.pem"
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Generate peers list for witness cross-checking
+      template:
+        src: ../roles/lottery-server/templates/peers.json.j2
+        dest: "{{ lottery_install_dir }}/peers.json"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Generate config file
+      template:
+        src: ../roles/lottery-server/templates/config.yaml.j2
+        dest: "{{ lottery_install_dir }}/config.yaml"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create systemd service file
+      template:
+        src: ../roles/lottery-server/templates/lottery-tlog.service.j2
+        dest: /etc/systemd/system/lottery-tlog.service
+        owner: root
+        group: root
+        mode: '0644'
+      notify: reload systemd
+
+    - name: Enable and start lottery-tlog service
+      systemd:
+        name: lottery-tlog
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+  handlers:
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+
+- name: Display deployment summary
+  hosts: localhost
+  gather_facts: no
+  
+  tasks:
+    - name: Show deployment results
+      debug:
+        msg: |
+          Deployment completed successfully!
+          
+          Servers:
+          {% for host in groups['lottery_servers'] %}
+          - {{ host }}: https://{{ hostvars[host].ansible_host }}:{{ hostvars[host].lottery_port }}
+            {% if hostvars[host].is_primary | default(false) %}(PRIMARY - accepts draws){% else %}(WITNESS){% endif %}
+          {% endfor %}
+          
+          Next steps:
+          1. Verify deployment: ansible-playbook playbooks/verify.yml
+          2. Check service status: ansible lottery_servers -m shell -a "systemctl status lottery-tlog" --become
+          3. View logs: ansible lottery_servers -m shell -a "journalctl -u lottery-tlog -n 50" --become
+          
+          Test the primary server:
+          curl -k --cert certs/lottery1-cert.pem --key certs/lottery1-key.pem \
+            https://{{ hostvars[groups['lottery_servers'][0]].ansible_host }}:{{ hostvars[groups['lottery_servers'][0]].lottery_port }}/api/status

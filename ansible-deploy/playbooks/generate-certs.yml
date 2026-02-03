@@ -1,0 +1,113 @@
+---
+- name: Generate mTLS certificates for lottery servers
+  hosts: localhost
+  gather_facts: no
+  vars:
+    certs_dir: "{{ playbook_dir }}/../certs"
+    ca_days: 3650  # 10 years
+    cert_days: 365  # 1 year
+    
+  tasks:
+    - name: Create certificates directory
+      file:
+        path: "{{ certs_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Check if CA already exists
+      stat:
+        path: "{{ certs_dir }}/ca-cert.pem"
+      register: ca_exists
+
+    - name: Generate CA private key
+      command: >
+        openssl genrsa -out {{ certs_dir }}/ca-key.pem 4096
+      when: not ca_exists.stat.exists
+
+    - name: Generate CA certificate
+      command: >
+        openssl req -new -x509
+        -key {{ certs_dir }}/ca-key.pem
+        -out {{ certs_dir }}/ca-cert.pem
+        -days {{ ca_days }}
+        -subj "/C=US/ST=State/L=City/O=Lottery TLog/CN=Lottery TLog CA"
+      when: not ca_exists.stat.exists
+
+    - name: Set CA certificate permissions
+      file:
+        path: "{{ certs_dir }}/ca-key.pem"
+        mode: '0600'
+      when: not ca_exists.stat.exists
+
+    - name: Get list of lottery servers
+      set_fact:
+        lottery_hosts: "{{ groups['lottery_servers'] }}"
+
+    - name: Generate server private keys
+      command: >
+        openssl genrsa -out {{ certs_dir }}/{{ item }}-key.pem 2048
+      args:
+        creates: "{{ certs_dir }}/{{ item }}-key.pem"
+      loop: "{{ lottery_hosts }}"
+
+    - name: Generate certificate signing requests
+      command: >
+        openssl req -new
+        -key {{ certs_dir }}/{{ item }}-key.pem
+        -out {{ certs_dir }}/{{ item }}-csr.pem
+        -subj "/C=US/ST=State/L=City/O=Lottery TLog/CN={{ hostvars[item].lottery_host | default(item) }}"
+      args:
+        creates: "{{ certs_dir }}/{{ item }}-csr.pem"
+      loop: "{{ lottery_hosts }}"
+
+    - name: Create OpenSSL extension file for SAN
+      copy:
+        dest: "{{ certs_dir }}/{{ item }}-ext.cnf"
+        content: |
+          subjectAltName = DNS:{{ hostvars[item].lottery_host | default(item) }},DNS:{{ item }},IP:{{ hostvars[item].ansible_host }}
+          extendedKeyUsage = serverAuth,clientAuth
+      loop: "{{ lottery_hosts }}"
+
+    - name: Sign server certificates
+      command: >
+        openssl x509 -req
+        -in {{ certs_dir }}/{{ item }}-csr.pem
+        -CA {{ certs_dir }}/ca-cert.pem
+        -CAkey {{ certs_dir }}/ca-key.pem
+        -CAcreateserial
+        -out {{ certs_dir }}/{{ item }}-cert.pem
+        -days {{ cert_days }}
+        -extfile {{ certs_dir }}/{{ item }}-ext.cnf
+      args:
+        creates: "{{ certs_dir }}/{{ item }}-cert.pem"
+      loop: "{{ lottery_hosts }}"
+
+    - name: Set certificate permissions
+      file:
+        path: "{{ certs_dir }}/{{ item }}-key.pem"
+        mode: '0600'
+      loop: "{{ lottery_hosts }}"
+
+    - name: Clean up temporary files
+      file:
+        path: "{{ certs_dir }}/{{ item[1] }}"
+        state: absent
+      loop: "{{ lottery_hosts | product(['-csr.pem', '-ext.cnf']) | list }}"
+      loop_control:
+        label: "{{ item[0] }}{{ item[1] }}"
+
+    - name: Display certificate information
+      debug:
+        msg: |
+          Certificates generated successfully!
+          
+          CA Certificate: {{ certs_dir }}/ca-cert.pem
+          CA Key: {{ certs_dir }}/ca-key.pem (KEEP SECURE!)
+          
+          Server Certificates:
+          {% for host in lottery_hosts %}
+          - {{ host }}: {{ certs_dir }}/{{ host }}-cert.pem, {{ certs_dir }}/{{ host }}-key.pem
+          {% endfor %}
+          
+          Next step: Run deployment playbook
+            ansible-playbook playbooks/deploy.yml

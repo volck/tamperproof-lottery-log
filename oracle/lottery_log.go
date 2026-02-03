@@ -49,11 +49,11 @@ func (l *LotteryLog) AddDraw(draw tlog.LotteryDraw) error {
 			FROM lottery_draws_blockchain 
 			WHERE seqno = :1
 		`, draw.SeqNo).Scan(&existingIndex)
-		
+
 		if err != nil && err != sql.ErrNoRows {
 			return fmt.Errorf("failed to check for duplicate: %w", err)
 		}
-		
+
 		if existingIndex.Valid {
 			return fmt.Errorf("duplicate draw: SeqNo %d already exists at index %d", draw.SeqNo, existingIndex.Int64)
 		}
@@ -454,12 +454,12 @@ type oracleHashReader struct {
 	ctx context.Context
 }
 
-func (r *oracleHashReader) ReadHashes(indexes []int64) ([]tlog.Hash, error) {
+func (r *oracleHashReader) ReadHashes(indexes []int64) ([]tlib.Hash, error) {
 	if len(indexes) == 0 {
 		return nil, nil
 	}
 
-	result := make([]tlog.Hash, len(indexes))
+	result := make([]tlib.Hash, len(indexes))
 
 	for i, idx := range indexes {
 		var hashValue []byte
@@ -487,7 +487,7 @@ func computeHashLevel(hashIndex, treeIndex int64) int {
 	// This is a simplified version - the actual level computation
 	// depends on the tlog algorithm's internal structure
 	level := 0
-	offset := hashIndex - tlog.StoredHashIndex(0, treeIndex)
+	offset := hashIndex - tlib.StoredHashIndex(0, treeIndex)
 	for offset > 0 {
 		level++
 		offset >>= 1

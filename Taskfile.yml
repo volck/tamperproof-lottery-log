@@ -1,0 +1,28 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Build lottery-tlog (file backend)
+    cmds:
+      - go build -o lottery-tlog .
+
+  build-oracle:
+    desc: Build lottery-tlog-oracle (Oracle backend)
+    env:
+      PKG_CONFIG_PATH: /opt/oracle/instantclient_19_23/pkgconfig:$PKG_CONFIG_PATH
+      LD_LIBRARY_PATH: /opt/oracle/instantclient_19_23:$LD_LIBRARY_PATH
+      CGO_ENABLED: 1
+      CGO_CFLAGS: -I/opt/oracle/instantclient_19_23/sdk/include
+      CGO_LDFLAGS: -L/opt/oracle/instantclient_19_23 -lclntsh
+    cmds:
+      - go build -tags oracle -o lottery-tlog-oracle .
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test ./...
+
+  clean:
+    desc: Remove built binaries
+    cmds:
+      - rm -f lottery-tlog lottery-tlog-oracle

@@ -1,0 +1,61 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list-all
+    silent: true
+
+  certs:
+    desc: Generate mTLS certificates for all servers
+    cmds:
+      - echo "Generating certificates..."
+      - ansible-playbook playbooks/generate-certs.yml
+
+  deploy:
+    desc: Deploy application to all servers
+    deps: [certs]
+    cmds:
+      - echo "Deploying to servers..."
+      - ansible-playbook playbooks/deploy.yml
+
+  verify:
+    desc: Verify deployment and connectivity
+    cmds:
+      - echo "Verifying deployment..."
+      - ansible-playbook playbooks/verify.yml
+
+  restart:
+    desc: Restart all services
+    cmds:
+      - echo "Restarting services..."
+      - ansible lottery_servers -m systemd -a "name=lottery-tlog state=restarted" --become
+
+  stop:
+    desc: Stop all services
+    cmds:
+      - echo "Stopping services..."
+      - ansible lottery_servers -m systemd -a "name=lottery-tlog state=stopped" --become
+
+  logs:
+    desc: Show logs from all servers
+    cmds:
+      - echo "Fetching logs from all servers..."
+      - ansible lottery_servers -m shell -a "journalctl -u lottery-tlog -n 50 --no-pager" --become
+
+  status:
+    desc: Check status of all servers
+    cmds:
+      - echo "Checking service status..."
+      - ansible lottery_servers -m shell -a "systemctl status lottery-tlog --no-pager" --become
+
+  clean:
+    desc: Stop services and remove deployment (preserves data directory)
+    cmds:
+      - echo "Cleaning up deployment..."
+      - ansible lottery_servers -m systemd -a "name=lottery-tlog state=stopped enabled=no" --become || true
+      - ansible lottery_servers -m file -a "path=/etc/systemd/system/lottery-tlog.service state=absent" --become || true
+      - ansible lottery_servers -m file -a "path={{ lottery_install_dir }} state=absent" --become || true
+      - ansible lottery_servers -m systemd -a "daemon_reload=yes" --become || true
+      - echo "Deployment cleaned up (data directory preserved)"

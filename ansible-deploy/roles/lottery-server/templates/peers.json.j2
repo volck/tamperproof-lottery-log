@@ -1,0 +1,17 @@
+{
+  "peers": [
+{% for host in groups['lottery_servers'] %}
+{% if host != inventory_hostname %}
+    {
+      "id": "{{ host }}",
+      "name": "{{ host }}",
+      "url": "https://{{ hostvars[host].ansible_host }}:{{ hostvars[host].lottery_port }}",
+      "cert_file": "{{ lottery_install_dir }}/certs/server-cert.pem",
+      "key_file": "{{ lottery_install_dir }}/certs/server-key.pem",
+      "ca_file": "{{ lottery_install_dir }}/certs/ca-cert.pem"
+    }{% if not loop.last %},{% endif %}
+
+{% endif %}
+{% endfor %}
+  ]
+}

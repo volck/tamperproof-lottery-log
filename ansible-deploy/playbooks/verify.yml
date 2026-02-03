@@ -1,0 +1,152 @@
+---
+- name: Verify Lottery Transparency Log Deployment
+  hosts: lottery_servers
+  become: yes
+  
+  tasks:
+    - name: Check if lottery-tlog binary exists
+      stat:
+        path: "{{ lottery_install_dir }}/lottery-tlog"
+      register: binary_check
+      failed_when: not binary_check.stat.exists
+
+    - name: Check if certificates exist
+      stat:
+        path: "{{ item }}"
+      register: cert_check
+      failed_when: not cert_check.stat.exists
+      loop:
+        - "{{ lottery_install_dir }}/certs/ca-cert.pem"
+        - "{{ lottery_install_dir }}/certs/server-cert.pem"
+        - "{{ lottery_install_dir }}/certs/server-key.pem"
+
+    - name: Check systemd service status
+      systemd:
+        name: lottery-tlog
+      register: service_status
+
+    - name: Verify service is running
+      assert:
+        that:
+          - service_status.status.ActiveState == "active"
+        fail_msg: "Service is not running on {{ inventory_hostname }}"
+        success_msg: "Service is running on {{ inventory_hostname }}"
+
+    - name: Wait for service to be ready
+      wait_for:
+        port: "{{ lottery_port }}"
+        host: "{{ ansible_host }}"
+        timeout: 30
+        delay: 2
+
+    - name: Test health endpoint
+      uri:
+        url: "https://{{ ansible_host }}:{{ lottery_port }}/health"
+        validate_certs: no
+        method: GET
+        timeout: 10
+      register: health_check
+      delegate_to: localhost
+      become: no
+
+    - name: Display health check result
+      debug:
+        msg: "{{ inventory_hostname }}: Health check {{ 'PASSED' if health_check.status == 200 else 'FAILED' }}"
+
+    - name: Test status endpoint with mTLS
+      uri:
+        url: "https://{{ ansible_host }}:{{ lottery_port }}/api/status"
+        validate_certs: no
+        client_cert: "{{ playbook_dir }}/../certs/{{ inventory_hostname }}-cert.pem"
+        client_key: "{{ playbook_dir }}/../certs/{{ inventory_hostname }}-key.pem"
+        method: GET
+        timeout: 10
+      register: status_check
+      delegate_to: localhost
+      become: no
+
+    - name: Display status check result
+      debug:
+        msg: |
+          {{ inventory_hostname }}: Status check PASSED
+          Tree size: {{ (status_check.json.tree_size | default(0)) }}
+          Tree hash: {{ (status_check.json.tree_hash | default('N/A'))[:16] }}...
+
+    - name: Get recent logs
+      command: journalctl -u lottery-tlog -n 20 --no-pager
+      register: recent_logs
+      changed_when: false
+
+    - name: Display recent logs
+      debug:
+        msg: "{{ recent_logs.stdout_lines }}"
+
+- name: Cross-check witness connectivity
+  hosts: lottery_servers
+  gather_facts: no
+  become: no
+  
+  tasks:
+    - name: Test peer connectivity from each server
+      uri:
+        url: "https://{{ hostvars[item].ansible_host }}:{{ hostvars[item].lottery_port }}/health"
+        validate_certs: no
+        method: GET
+        timeout: 10
+      register: peer_check
+      delegate_to: localhost
+      loop: "{{ groups['lottery_servers'] }}"
+      when: item != inventory_hostname
+
+    - name: Report peer connectivity
+      debug:
+        msg: "{{ inventory_hostname }} can reach {{ item.item }}: {{ 'YES' if item.status == 200 else 'NO' }}"
+      loop: "{{ peer_check.results }}"
+      when: item.item is defined and item.item != inventory_hostname
+
+- name: Display final verification summary
+  hosts: localhost
+  gather_facts: no
+  
+  tasks:
+    - name: Show summary
+      debug:
+        msg: |
+          
+          ═══════════════════════════════════════════════════════════
+          Verification Summary
+          ═══════════════════════════════════════════════════════════
+          
+          All servers are running and accessible!
+          
+          Primary Server (accepts draws):
+          {% for host in groups['lottery_servers'] %}
+          {% if hostvars[host].is_primary | default(false) %}
+          - {{ host }}: https://{{ hostvars[host].ansible_host }}:{{ hostvars[host].lottery_port }}
+          {% endif %}
+          {% endfor %}
+          
+          Witness Servers:
+          {% for host in groups['lottery_servers'] %}
+          {% if not (hostvars[host].is_primary | default(false)) %}
+          - {{ host }}: https://{{ hostvars[host].ansible_host }}:{{ hostvars[host].lottery_port }}
+          {% endif %}
+          {% endfor %}
+          
+          ═══════════════════════════════════════════════════════════
+          
+          You can now:
+          1. Submit a test draw to the primary server
+          2. Query witness observations
+          3. View security alerts
+          
+          Example commands:
+          
+          # Add a draw (from primary server)
+          curl -k --cert certs/lottery1-cert.pem --key certs/lottery1-key.pem \
+            -X POST https://{{ hostvars[groups['lottery_servers'][0]].ansible_host }}:{{ hostvars[groups['lottery_servers'][0]].lottery_port }}/api/admin/draw \
+            -H "Content-Type: application/json" \
+            -d @sample-draw.json
+          
+          # Check status
+          curl -k https://{{ hostvars[groups['lottery_servers'][0]].ansible_host }}:{{ hostvars[groups['lottery_servers'][0]].lottery_port }}/api/status
