@@ -30,11 +30,14 @@ type Connection struct {
 
 // NewConnection creates a new Oracle database connection
 func NewConnection(cfg Config, logger *slog.Logger) (*Connection, error) {
-	logger.Info("Connecting to Oracle database")
+	logger.Info("Initializing Oracle database connection",
+		"max_open_conns", cfg.MaxOpenConns,
+		"max_idle_conns", cfg.MaxIdleConns)
 
 	// Open connection to Oracle using go-ora driver
 	db, err := sql.Open("oracle", cfg.ConnectionString)
 	if err != nil {
+		logger.Error("Failed to open Oracle database", "error", err)
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
@@ -63,16 +66,33 @@ func NewConnection(cfg Config, logger *slog.Logger) (*Connection, error) {
 		db.SetConnMaxIdleTime(30 * time.Second) // Default
 	}
 
+	logger.Info("Testing Oracle database connectivity...")
+	
 	// Test the connection
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
+		logger.Error("Failed to establish Oracle database connection", "error", err)
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	logger.Info("Successfully connected to Oracle database")
+	// Query database version and session info for verification
+	var version, user, sid string
+	err = db.QueryRowContext(ctx, `
+		SELECT banner, user, sys_context('USERENV', 'SID')
+		FROM v$version
+		WHERE ROWNUM = 1
+	`).Scan(&version, &user, &sid)
+	if err != nil {
+		logger.Warn("Could not retrieve database version info", "error", err)
+	} else {
+		logger.Info("Oracle connection established successfully",
+			"version", version,
+			"user", user,
+			"session_id", sid)
+	}
 
 	return &Connection{
 		db:     db,
