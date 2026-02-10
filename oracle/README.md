@@ -45,30 +45,9 @@ Oracle 19c blockchain tables provide:
 
 1. Oracle Database 19c or later
 2. Database user with blockchain table privileges
-3. Go 1.21+ with Oracle Instant Client libraries
+3. Go 1.21+ (no Oracle client libraries required - uses pure Go driver)
 
-### Step 1: Install Oracle Instant Client
-
-**Linux:**
-```bash
-# Download from Oracle website or use package manager
-# For Ubuntu/Debian:
-sudo apt-get install oracle-instantclient-basic
-
-# Set environment variables
-export LD_LIBRARY_PATH=/usr/lib/oracle/19.x/client64/lib:$LD_LIBRARY_PATH
-```
-
-**macOS:**
-```bash
-brew tap InstantClientTap/instantclient
-brew install instantclient-basic
-```
-
-**Windows:**
-Download and install from Oracle website, then add to PATH.
-
-### Step 2: Create Database User
+### Step 1: Create Database User
 
 Connect as SYSDBA and run:
 ```sql
@@ -77,7 +56,7 @@ GRANT CONNECT, RESOURCE, CREATE TABLE TO lottery_user;
 GRANT UNLIMITED TABLESPACE TO lottery_user;
 ```
 
-### Step 3: Create Blockchain Schema
+### Step 2: Create Blockchain Schema
 
 ```bash
 cd oracle
@@ -86,14 +65,15 @@ sqlplus lottery_user/SecurePassword123!@//hostname:1521/service_name @schema.sql
 
 Or see [SETUP.sql](./SETUP.sql) for detailed instructions.
 
-### Step 4: Configure Application
+### Step 3: Configure Application
 
 Update `config.yaml`:
 ```yaml
 storage_backend: "oracle"
 
 oracle:
-  connection_string: "lottery_user/SecurePassword123!@hostname:1521/ORCLPDB1"
+  # Connection string format for go-ora: oracle://user:password@host:port/service_name
+  connection_string: "oracle://lottery_user:SecurePassword123!@hostname:1521/ORCLPDB1"
   max_open_conns: 25
   max_idle_conns: 5
   conn_max_lifetime: "5m"

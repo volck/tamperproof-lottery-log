@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"time"
 
-	_ "github.com/godror/godror"
+	_ "github.com/sijms/go-ora/v2"
 )
 
 // Config holds Oracle database configuration
@@ -32,8 +32,8 @@ type Connection struct {
 func NewConnection(cfg Config, logger *slog.Logger) (*Connection, error) {
 	logger.Info("Connecting to Oracle database")
 
-	// Open connection to Oracle
-	db, err := sql.Open("godror", cfg.ConnectionString)
+	// Open connection to Oracle using go-ora driver
+	db, err := sql.Open("oracle", cfg.ConnectionString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}

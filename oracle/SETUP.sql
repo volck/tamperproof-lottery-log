@@ -52,14 +52,14 @@ WHERE owner = USER;
 --
 -- storage_backend: "oracle"
 -- oracle:
---   connection_string: "lottery_user/YourSecurePassword123!@hostname:1521/service_name"
+--   connection_string: "oracle://lottery_user:YourSecurePassword123!@hostname:1521/service_name"
 --   max_open_conns: 25
 --   max_idle_conns: 5
 --   conn_max_lifetime: "5m"
 --   conn_max_idle_time: "30s"
 
 -- Or set environment variable:
--- export ORACLE_CONNECTION_STRING="lottery_user/YourSecurePassword123!@hostname:1521/service_name"
+-- export ORACLE_CONNECTION_STRING="oracle://lottery_user:YourSecurePassword123!@hostname:1521/service_name"
 
 -- ============================================================================
 -- STEP 5: Test the connection
@@ -83,9 +83,11 @@ SELECT * FROM v_current_tree_state;
 -- View recent draws with blockchain metadata
 SELECT 
     draw_index,
-    draw_id,
-    position,
-    max_position,
+    seqno,
+    message_code,
+    game,
+    draw,
+    subdraw,
     timestamp,
     ORABCTAB_CREATION_TIME$,
     ORABCTAB_HASH$,

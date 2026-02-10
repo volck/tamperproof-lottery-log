@@ -3,11 +3,12 @@ log_directory: ".lottery-data"
 log_level: "info"
 
 # Storage backend: "file" or "oracle"
-storage_backend: "file"
+storage_backend: "oracle"
 
 # Oracle Database Configuration
 oracle:
   # Connection string format: user/password@hostname:port/service_name
+  # Or with TNS descriptor: user/password@(DESCRIPTION=...)
   # Example: lottery_user/secure_password@localhost:1521/ORCLPDB1
   connection_string: "${ORACLE_CONNECTION_STRING}"
   max_open_conns: 25

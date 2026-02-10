@@ -12,16 +12,20 @@ tasks:
       - GOOS=windows GOARCH=amd64 go build -o release/lottery-tlog-windows-amd64.exe .
 
   build-oracle:
-    desc: Build lottery-tlog-oracle (Oracle backend) for native platform only
-    env:
-      PKG_CONFIG_PATH: /opt/oracle/instantclient_19_23/pkgconfig:$PKG_CONFIG_PATH
-      LD_LIBRARY_PATH: /opt/oracle/instantclient_19_23:$LD_LIBRARY_PATH
-      CGO_ENABLED: 1
-      CGO_CFLAGS: -I/opt/oracle/instantclient_19_23/sdk/include
-      CGO_LDFLAGS: -L/opt/oracle/instantclient_19_23 -lclntsh
+    desc: Build lottery-tlog-oracle (Oracle backend) with pure Go driver
     cmds:
       - mkdir -p release
       - go build -tags oracle -o release/lottery-tlog-oracle .
+
+  build-oracle-all:
+    desc: Build lottery-tlog-oracle for all platforms (no CGO required)
+    cmds:
+      - mkdir -p release
+      - GOOS=linux GOARCH=amd64 go build -tags oracle -o release/lottery-tlog-oracle-linux-amd64 .
+      - GOOS=linux GOARCH=arm64 go build -tags oracle -o release/lottery-tlog-oracle-linux-arm64 .
+      - GOOS=darwin GOARCH=amd64 go build -tags oracle -o release/lottery-tlog-oracle-darwin-amd64 .
+      - GOOS=darwin GOARCH=arm64 go build -tags oracle -o release/lottery-tlog-oracle-darwin-arm64 .
+      - GOOS=windows GOARCH=amd64 go build -tags oracle -o release/lottery-tlog-oracle-windows-amd64.exe .
 
   test:
     desc: Run tests
